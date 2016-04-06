@@ -30,6 +30,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <WS2TCPIP.H>
 #include <Ws2ipdef.h>
 #include <windows.h>
+#include <gdiplus.h>
 #include <Wininet.h>
 #include <jansson.h>
 #include <strsafe.h>
@@ -37,7 +38,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <Tcpestats.h>
 #include <commctrl.h>
 
+using namespace Gdiplus;
+
+extern "C" {
 #include "librtmp/rtmp.h"
+extern uint64_t connectTime;
+}
 
 #include "resource.h"
 
@@ -48,8 +54,8 @@ processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 const wchar_t szAppName[] = L"TwitchTest";
 HINSTANCE hThisInstance;								// current instance
 LRESULT CALLBACK	WndProc(HWND, UINT, WPARAM, LPARAM);
-HANDLE hwndMain;
-DWORD ThreadID;
+HWND hwndMain;
+unsigned int ThreadID;
 HANDLE hAbortThreadEvent;
 
 HCURSOR hCursorHand;
@@ -115,11 +121,8 @@ static const AVal av_Started_playing = AVC("Started playing");
 static const AVal av_NetStream_Play_Stop = AVC("NetStream.Play.Stop");
 static const AVal av_Stopped_playing = AVC("Stopped playing");
 
-static const AVal av_OBSVersion = AVC("TwitchTest/1.1");
+static const AVal av_OBSVersion = AVC("TwitchTest/1.2");
 static const AVal av_setDataFrame = AVC("@setDataFrame");
-
-extern uint64_t connectTime;
-
 
 void ProcMainInit (HWND hDlg)
 {
@@ -640,12 +643,191 @@ int ServerIsFiltered(const char *name, int mask)
     return 1;
 }
 
+int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
+{
+	UINT  num = 0;          // number of image encoders
+	UINT  size = 0;         // size of the image encoder array in bytes
+
+	ImageCodecInfo* pImageCodecInfo = NULL;
+
+	GetImageEncodersSize(&num, &size);
+	if (size == 0)
+		return -1;  // Failure
+
+	pImageCodecInfo = (ImageCodecInfo*)(malloc(size));
+	if (pImageCodecInfo == NULL)
+		return -1;  // Failure
+
+	GetImageEncoders(num, size, pImageCodecInfo);
+
+	for (UINT j = 0; j < num; ++j)
+	{
+		if (wcscmp(pImageCodecInfo[j].MimeType, format) == 0)
+		{
+			*pClsid = pImageCodecInfo[j].Clsid;
+			free(pImageCodecInfo);
+			return j;  // Success
+		}
+	}
+	free(pImageCodecInfo);
+	return -1;  // Failure
+}
+
+unsigned int __stdcall ScreenshotThread(void *arg)
+{
+	HDC hDC = GetWindowDC(hwndMain);
+	HDC hMemoryDC = CreateCompatibleDC(hDC);
+	RECT rect;
+	json_t *root = NULL;
+	json_error_t error = { 0 };
+
+	SetDlgItemText(hwndMain, IDC_SHARE, L"Uploading...");
+
+	GetWindowRect  (hwndMain, &rect);
+
+	int width = rect.right - rect.left;
+	int height = rect.bottom - rect.top;
+
+	HBITMAP hBitmap = CreateCompatibleBitmap(hDC, width, height);
+
+	HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemoryDC, hBitmap);
+
+	BitBlt(hMemoryDC, 0, 0, width, height, hDC, 0, 0, SRCCOPY);
+	hBitmap = (HBITMAP)SelectObject(hMemoryDC, hOldBitmap);
+
+	Bitmap *image = new Bitmap(hBitmap, NULL);
+	CLSID myClsId;
+	int retVal = GetEncoderClsid(L"image/png", &myClsId);
+	if (retVal == -1)
+		goto failure;
+
+	wchar_t tempPath[MAX_PATH];
+	wchar_t tempFileName[MAX_PATH];
+
+	GetTempPath (_countof(tempPath), tempPath);
+
+	GetTempFileName (tempPath, L"twt", 0, tempFileName);
+	image->Save(tempFileName, &myClsId, NULL);
+	delete image;
+
+	DeleteDC(hMemoryDC);
+	DeleteDC(hDC);
+
+	HANDLE hFile;
+	hFile = CreateFile (tempFileName, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, nullptr);
+	if (hFile == INVALID_HANDLE_VALUE)
+		goto failure;
+
+	LARGE_INTEGER fileSize;
+	GetFileSizeEx(hFile, &fileSize);
+
+	BYTE *buff = (BYTE *)malloc (fileSize.QuadPart);
+
+	DWORD read;
+	ReadFile (hFile, buff, fileSize.QuadPart, &read, nullptr);
+	if (read != fileSize.QuadPart)
+		goto failure;
+
+	CloseHandle (hFile);
+
+	DeleteFile (tempFileName);
+
+#define BOUNDARY_TEXT "------------TwitchTestIsAwesome"
+
+	HINTERNET hInternet = InternetOpen(L"TwitchTest/1.2", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+
+	HINTERNET hConnect = InternetConnect(hInternet, L"api.imgur.com", INTERNET_DEFAULT_HTTPS_PORT, nullptr, nullptr, INTERNET_SERVICE_HTTP, INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
+	if (!hConnect)
+		goto failure;
+
+	LPCWSTR acceptTypes[] = { L"*/*", NULL };
+
+	HINTERNET hRequest = HttpOpenRequest (hConnect, L"POST", L"/3/image", L"HTTP/1.1", nullptr, acceptTypes, INTERNET_FLAG_NO_UI | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+	if (!hRequest)
+		goto failure;
+
+	char *prefix = "--" BOUNDARY_TEXT "\r\n"
+		"Content-Disposition: form-data; name=\"image\"; filename=\"twitchtest2.png\"\r\n"
+		"Content-Transfer-Encoding: binary\r\n"
+		"Content-Type: image/png\r\n\r\n";
+
+	char *suffix = "\r\n--" BOUNDARY_TEXT "--\r\n";
+
+	DWORD requestLength = (DWORD)fileSize.QuadPart + strlen(prefix) + strlen(suffix);
+
+	BYTE *request = (BYTE *)malloc (requestLength);
+
+	CopyMemory (request, prefix, strlen(prefix));
+	CopyMemory (request + strlen(prefix), buff, fileSize.QuadPart);
+	CopyMemory (request + strlen(prefix) + fileSize.QuadPart, suffix, strlen(suffix));
+
+	wchar_t headers[1024];
+
+	wsprintf (headers, L"Content-Type: multipart/form-data; boundary=" BOUNDARY_TEXT "\r\nAuthorization: Client-ID " IMGUR_CLIENT_ID "\r\nContent-Length: %u", requestLength);
+
+	int ret = HttpSendRequest(hRequest, headers, 0, request, requestLength);
+	free (request);
+
+	if (!ret)
+		goto failure;
+
+	char response[16384];
+	InternetReadFile (hRequest, response, sizeof(response), &read);
+	if (!read)
+		goto failure;
+
+	response[read] = 0;
+	
+	json_t *link;
+
+	const char *url;
+	root = json_loads(response, 0, &error);
+
+	if (!json_is_object(root))
+		goto failure;
+
+	json_t *data = json_object_get(root, "data");
+	if (!data)
+		goto failure;
+
+	link = json_object_get(data, "link");
+	if (!link)
+		goto failure;
+
+	url = json_string_value(link);
+
+	if (!strncmp (url, "https://", 8) && !strncmp (url, "http://", 7))
+		goto failure;
+
+	ShellExecuteA(hwndMain, "open", url, NULL, 0, SW_SHOWNORMAL);
+	EnableWindow (GetDlgItem(hwndMain, IDC_SHARE), TRUE);
+	SetDlgItemText(hwndMain, IDC_SHARE, L"Share Result");
+
+	if (root)
+		json_decref(root);
+
+	return 0;
+
+failure:
+	if (root)
+		json_decref(root);
+
+	MessageBox (hwndMain, L"Uploading image for sharing failed :(", L"Upload Error", MB_ICONERROR);
+	EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), TRUE);
+	SetDlgItemText(hwndMain, IDC_SHARE, L"Share Result");
+	return 1;
+}
+
 unsigned int __stdcall BandwidthTest(void *arg)
 {
     int i;
     int tcpBufferSize;
     int *indexOrder = NULL;
     RTMP *rtmp;
+	json_t *root = NULL;
+	json_error_t error = { 0 };
+	RTMPPacket packet = { 0 };
+	MIB_TCPROW row = { 0 };
 
     i = SendDlgItemMessage(hwndMain, IDC_COMBO1, CB_GETCURSEL, 0, 0);
     if (i == -1)
@@ -687,7 +869,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
     }
 
     int len = strlen(keyBuffer) + 1 + 14;
-    key = malloc(len);
+    key = (char *)malloc(len);
 
     strcpy_s(key, len, keyBuffer);
     strcat_s(key, len, "?bandwidthtest");
@@ -697,9 +879,9 @@ unsigned int __stdcall BandwidthTest(void *arg)
     HINTERNET hConnect, hInternet;
     char buff[65536];
     int read = 0;
-    int ret;
+    DWORD ret;
 
-    hInternet = InternetOpen(L"TwitchTest/1.1", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+    hInternet = InternetOpen(L"TwitchTest/1.2", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 
     hConnect = InternetOpenUrl(hInternet, L"https://api.twitch.tv/kraken/ingests", L"Accept: */*", -1L, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
 
@@ -726,9 +908,6 @@ unsigned int __stdcall BandwidthTest(void *arg)
     InternetCloseHandle(hConnect);
     InternetCloseHandle(hInternet);
 
-    json_t          *root;
-    json_error_t    error = {0};
-
     root = json_loads(buff, 0, &error);
 
     if (!json_is_object(root))
@@ -738,7 +917,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
     SendMessage(hwndMain, WM_APP + 10, json_array_size(ingests), 0);
 
-    indexOrder = malloc(json_array_size(ingests) * sizeof(int));
+    indexOrder = (int *)malloc(json_array_size(ingests) * sizeof(int));
     for (i = 0; i < (int)json_array_size(ingests); i++)
         indexOrder[i] = i;
 
@@ -867,7 +1046,6 @@ unsigned int __stdcall BandwidthTest(void *arg)
 			continue;
 		}
 
-        MIB_TCPROW row = {0};
         SOCKADDR_STORAGE clientSockName;
         int nameLen = sizeof(SOCKADDR_STORAGE);
         getsockname (rtmp->m_sb.sb_socket, (struct sockaddr *)&clientSockName, &nameLen);
@@ -914,12 +1092,11 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
         SendRTMPMetadata(rtmp);
 
-        char junk[4096] = { 0xde };
-        RTMPPacket packet = { 0 };
-
+        unsigned char junk[4096] = { 0xde };
+		
         packet.m_nChannel = 0x05; // source channel
         packet.m_packetType = RTMP_PACKET_TYPE_AUDIO;
-        packet.m_body = junk + RTMP_MAX_HEADER_SIZE;
+        packet.m_body = (char *)junk + RTMP_MAX_HEADER_SIZE;
         packet.m_nBodySize = sizeof(junk) - RTMP_MAX_HEADER_SIZE;
 
         uint64_t realStart = timeGetTime();
@@ -1083,6 +1260,9 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
 terribleProblems:
 
+	if (root)
+		json_decref(root);
+
     if (indexOrder)
         free(indexOrder);
 
@@ -1094,6 +1274,7 @@ terribleProblems:
     SetDlgItemText(hwndMain, IDOK, L"Start");
     ThreadID = 0;
 
+	EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), TRUE);
     EnableWindow(GetDlgItem(hwndMain, IDC_US), TRUE);
     EnableWindow(GetDlgItem(hwndMain, IDC_EU), TRUE);
     EnableWindow(GetDlgItem(hwndMain, IDC_ASIA), TRUE);
@@ -1165,10 +1346,18 @@ LRESULT CALLBACK ProcMain(HWND hDlg, UINT message, UINT wParam, LONG lParam)
                             EnableWindow(GetDlgItem(hwndMain, IDC_EDIT1), FALSE);
                             EnableWindow(GetDlgItem(hwndMain, IDC_COMBO1), FALSE);
                             EnableWindow(GetDlgItem(hwndMain, IDC_DURATION), FALSE);
-					        _beginthreadex (NULL, 0, (void *)BandwidthTest, NULL, 0, &ThreadID);
+							EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), FALSE);
+					        _beginthreadex (NULL, 0, (_beginthreadex_proc_type)BandwidthTest, NULL, 0, &ThreadID);
                         }
                     }
 					return TRUE;
+
+				case IDC_SHARE:
+					unsigned int dummy;
+					EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), FALSE);
+					_beginthreadex(NULL, 0, (_beginthreadex_proc_type)ScreenshotThread, NULL, 0, &dummy);
+					return TRUE;
+
 				case IDC_EXIT:
                     if (HIWORD(wParam) == BN_CLICKED)
 					    DestroyWindow (hwndMain);
@@ -1229,6 +1418,10 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     InitCommonControlsEx(&common);
 
+	GdiplusStartupInput gdiplusStartupInput;
+	ULONG_PTR gdiplusToken;
+	GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
+
 	//create window
 	Myhwnd = CreateDialog (hThisInstance, MAKEINTRESOURCE(IDD_DIALOG1), 0, (DLGPROC)ProcMain);
 
@@ -1258,5 +1451,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance,
 			DispatchMessage(&msg);
 		}
 	}
+
+	GdiplusShutdown(gdiplusToken);
+
 	return (int)(msg.wParam);
 }

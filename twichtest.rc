@@ -52,7 +52,7 @@ END
 
 IDD_DIALOG1 DIALOGEX 0, 0, 367, 318
 STYLE DS_SETFONT | DS_CENTER | WS_MINIMIZEBOX | WS_CAPTION | WS_SYSMENU
-CAPTION "Twitch Bandwidth Test v1.1"
+CAPTION "Twitch Bandwidth Test v1.2"
 FONT 8, "Segoe UI", 400, 0, 0x0
 BEGIN
     EDITTEXT        IDC_EDIT1,7,35,250,14,ES_PASSWORD | ES_AUTOHSCROLL
@@ -71,6 +71,7 @@ BEGIN
     LTEXT           "Regions to test:",IDC_STATIC,8,52,55,8
     COMBOBOX        IDC_DURATION,270,59,90,30,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT           "Test Duration",IDC_STATIC,271,50,89,8
+    PUSHBUTTON      "Share Result",IDC_SHARE,62,297,50,14,WS_DISABLED
 END
 
 
@@ -101,6 +102,7 @@ END
 // Icon with lowest ID value placed first to ensure application icon
 // remains consistent on all systems.
 IDI_ICON2               ICON                    "small.ico"
+
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -138,6 +140,17 @@ BEGIN
     BEGIN
         VALUE "Translation", 0x409, 1200
     END
+END
+
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// AFX_DIALOG_LAYOUT
+//
+
+IDD_DIALOG1 AFX_DIALOG_LAYOUT
+BEGIN
+    0
 END
 
 #endif    // English (United States) resources

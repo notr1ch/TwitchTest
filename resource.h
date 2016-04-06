@@ -1,6 +1,6 @@
 //{{NO_DEPENDENCIES}}
 // Microsoft Visual C++ generated include file.
-// Used by nonet.rc
+// Used by twichtest.rc
 //
 #define IDD_DIALOG1                     101
 #define IDI_ICON1                       103
@@ -22,6 +22,8 @@
 #define IDC_ASIA                        1019
 #define IDC_OTHER                       1020
 #define IDC_LIST                        1021
+#define IDC_BUTTON1                     1022
+#define IDC_SHARE                       1022
 
 // Next default values for new objects
 // 
@@ -29,7 +31,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        105
 #define _APS_NEXT_COMMAND_VALUE         40001
-#define _APS_NEXT_CONTROL_VALUE         1022
+#define _APS_NEXT_CONTROL_VALUE         1023
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif
