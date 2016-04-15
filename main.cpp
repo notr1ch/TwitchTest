@@ -121,7 +121,7 @@ static const AVal av_Started_playing = AVC("Started playing");
 static const AVal av_NetStream_Play_Stop = AVC("NetStream.Play.Stop");
 static const AVal av_Stopped_playing = AVC("Stopped playing");
 
-static const AVal av_OBSVersion = AVC("TwitchTest/1.2");
+static const AVal av_OBSVersion = AVC("TwitchTest/1.21");
 static const AVal av_setDataFrame = AVC("@setDataFrame");
 
 void ProcMainInit (HWND hDlg)
@@ -205,6 +205,25 @@ void ProcMainInit (HWND hDlg)
 
     SendDlgItemMessage(hDlg, IDC_DURATION, CB_SETCURSEL, 1, 0);
 
+	DATA_BLOB blobIn;
+	DATA_BLOB blobOut;
+
+	BYTE encryptedData[1024];
+	DWORD encryptedDataLen = sizeof(encryptedData);
+
+	if (RegGetValue(HKEY_CURRENT_USER, L"SOFTWARE\\r1ch.net\\TwitchTest", L"LastStreamKey", RRF_RT_REG_BINARY, NULL, encryptedData, &encryptedDataLen) == ERROR_SUCCESS)
+	{
+		blobIn.pbData = (BYTE *)encryptedData;
+		blobIn.cbData = encryptedDataLen;
+
+		if (CryptUnprotectData(&blobIn, NULL, NULL, NULL, NULL, 0, &blobOut))
+		{
+			SetDlgItemText(hwndMain, IDC_EDIT1, (LPCWSTR)blobOut.pbData);
+			//SendDlgItemMessage(hwndMain, IDC_EDIT1, EM_SETSEL, -1, 0);
+			LocalFree(blobOut.pbData);
+		}
+	}
+
     LVCOLUMN col;
     ZeroMemory(&col, sizeof(col));
 
@@ -222,6 +241,8 @@ void ProcMainInit (HWND hDlg)
     WSAStartup(MAKEWORD(2, 2), &wsad);
 
     hAbortThreadEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+	SendMessage(hDlg, WM_NEXTDLGCTL, (WPARAM)GetDlgItem(hDlg, IDOK), TRUE);
 
     ShowWindow(hDlg, SW_SHOWNORMAL);
 }
@@ -734,7 +755,7 @@ unsigned int __stdcall ScreenshotThread(void *arg)
 
 #define BOUNDARY_TEXT "------------TwitchTestIsAwesome"
 
-	HINTERNET hInternet = InternetOpen(L"TwitchTest/1.2", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+	HINTERNET hInternet = InternetOpen(L"TwitchTest/1.21", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 
 	HINTERNET hConnect = InternetConnect(hInternet, L"api.imgur.com", INTERNET_DEFAULT_HTTPS_PORT, nullptr, nullptr, INTERNET_SERVICE_HTTP, INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
 	if (!hConnect)
@@ -881,7 +902,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
     int read = 0;
     DWORD ret;
 
-    hInternet = InternetOpen(L"TwitchTest/1.2", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+    hInternet = InternetOpen(L"TwitchTest/1.21", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 
     hConnect = InternetOpenUrl(hInternet, L"https://api.twitch.tv/kraken/ingests", L"Accept: */*", -1L, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
 
@@ -1286,15 +1307,46 @@ terribleProblems:
     return 0;
 }
 
+VOID SaveSettings(VOID)
+{
+	DWORD	result;
+	HKEY	hk;
+	wchar_t	temp[256];
+
+	RegCreateKeyEx(HKEY_CURRENT_USER, L"SOFTWARE\\r1ch.net\\TwitchTest", 0, NULL, 0, KEY_WRITE, NULL, &hk, &result);
+
+	if (!(RegOpenKeyEx(HKEY_CURRENT_USER, L"SOFTWARE\\r1ch.net\\TwitchTest", 0, KEY_WRITE, &hk)))
+	{
+		DATA_BLOB blobIn;
+		DATA_BLOB blobOut;
+
+		GetDlgItemText(hwndMain, IDC_EDIT1, temp, _countof(temp) - 1);
+		
+		blobIn.pbData = (BYTE *)temp;
+		blobIn.cbData = (wcslen(temp) + 1) * sizeof(wchar_t);
+
+		if (CryptProtectData(&blobIn, NULL, NULL, NULL, NULL, 0, &blobOut))
+		{
+			RegSetValueEx(hk, L"LastStreamKey", 0, REG_BINARY, (const BYTE *)blobOut.pbData, blobOut.cbData);
+			LocalFree(blobOut.pbData);
+		}
+
+		RegCloseKey (hk);
+	}
+}
+
 LRESULT CALLBACK ProcMain(HWND hDlg, UINT message, UINT wParam, LONG lParam)
 {
 	switch (message)
 	{
 		case WM_INITDIALOG:
 			ProcMainInit(hDlg);
-			return TRUE;
+			return FALSE;
 
-        case WM_UPDATEUISTATE:
+		//case WM_QUERYUISTATE:
+			//return UISF_HIDEFOCUS;
+
+        case WM_CHANGEUISTATE:
         {
             // Disable focus rectangles by setting or masking out the flag where appropriate. 
             switch (LOWORD(wParam))
@@ -1389,6 +1441,7 @@ LRESULT CALLBACK ProcMain(HWND hDlg, UINT message, UINT wParam, LONG lParam)
             break;
 
 		case WM_DESTROY:
+			SaveSettings();
 			PostQuitMessage (0);
 			return TRUE;
 
