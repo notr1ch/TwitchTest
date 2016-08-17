@@ -902,9 +902,9 @@ unsigned int __stdcall BandwidthTest(void *arg)
     int read = 0;
     DWORD ret;
 
-    hInternet = InternetOpen(L"TwitchTest/1.21", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+    hInternet = InternetOpen(L"TwitchTest/1.22", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 
-    hConnect = InternetOpenUrl(hInternet, L"https://api.twitch.tv/kraken/ingests", L"Accept: */*", -1L, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
+    hConnect = InternetOpenUrl(hInternet, L"https://api.twitch.tv/kraken/ingests", L"Accept: */*\nClient-ID: mme8bj93xsju8hte7jd9vctbf79lmec", -1L, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
 
     for (;;)
     {
@@ -935,6 +935,11 @@ unsigned int __stdcall BandwidthTest(void *arg)
         _endthreadex(2);
 
     json_t *ingests = json_object_get(root, "ingests");
+	if (!ingests || !json_array_size(ingests))
+	{
+		MessageBox(hwndMain, L"Failed to parse Twitch ingest list.", L"Error", MB_ICONERROR);
+		goto terribleProblems;
+	}
 
     SendMessage(hwndMain, WM_APP + 10, json_array_size(ingests), 0);
 
@@ -1176,7 +1181,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
                 lastUpdateTime = nowTime;
             }
 
-            if (bytesSent - startBytes > 0 && nowTime - startTime > 0)
+            if (bytesSent - startBytes > 0 && nowTime - startTime > 250)
             {
                 speed = ((bytesSent - startBytes)) / ((nowTime - startTime) / 1000.0f);
                 speed = speed * 8 / 1000;
@@ -1416,7 +1421,7 @@ LRESULT CALLBACK ProcMain(HWND hDlg, UINT message, UINT wParam, LONG lParam)
 					return TRUE;
                 case IDC_GETKEY:
                     if (HIWORD(wParam) == BN_CLICKED)
-                        ShellExecute(hDlg, L"open", L"http://www.twitch.tv/broadcast/dashboard/streamkey", NULL, NULL, SW_SHOWNORMAL);
+                        ShellExecute(hDlg, L"open", L"https://www.twitch.tv/broadcast/dashboard/streamkey", NULL, NULL, SW_SHOWNORMAL);
 			}
 			break;
         case WM_SETCURSOR:
