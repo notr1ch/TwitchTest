@@ -37,6 +37,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <iphlpapi.h>
 #include <Tcpestats.h>
 #include <commctrl.h>
+#include <Psapi.h>
+#include <setupapi.h>
+#include <initguid.h>
+#include <Ndisguid.h>
 
 using namespace Gdiplus;
 
@@ -121,12 +125,203 @@ static const AVal av_Started_playing = AVC("Started playing");
 static const AVal av_NetStream_Play_Stop = AVC("NetStream.Play.Stop");
 static const AVal av_Stopped_playing = AVC("Stopped playing");
 
-static const AVal av_OBSVersion = AVC("TwitchTest/1.21");
+static const AVal av_OBSVersion = AVC("TwitchTest/1.3");
 static const AVal av_setDataFrame = AVC("@setDataFrame");
+
+
+DWORD WINAPI CheckNetworkDriverThread (VOID *arg)
+{
+	HDEVINFO                         hDevInfo;
+	SP_DEVICE_INTERFACE_DATA         DevIntfData;
+	PSP_DEVICE_INTERFACE_DETAIL_DATA DevIntfDetailData;
+	SP_DEVINFO_DATA                  DevData;
+
+	DWORD dwSize, dwMemberIdx;
+	BYTE lpData[1024];
+
+	MIB_IPFORWARDROW route;
+	MIB_IFROW row;
+
+	wchar_t interfaceInfo[1024];
+
+	if (!GetBestRoute(2917950754, 0, &route))
+	{
+		memset(&row, 0, sizeof(row));
+		row.dwIndex = route.dwForwardIfIndex;
+
+		if (GetIfEntry(&row) != NO_ERROR)
+		{
+			//MessageBox (hwndMain, L"GetIfEntry", NULL, MB_OK);
+			return 1;
+		}
+	}
+	else
+	{
+		//MessageBox (hwndMain, L"GetBestRoute", NULL, MB_OK);
+		return 1;
+	}
+
+	hDevInfo = SetupDiGetClassDevs(
+		&GUID_DEVINTERFACE_NET, NULL, 0, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
+
+	if (hDevInfo != INVALID_HANDLE_VALUE)
+	{
+		DevIntfData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+
+		for (dwMemberIdx = 0;; dwMemberIdx++)
+		{
+			SetupDiEnumDeviceInterfaces(hDevInfo, NULL, &GUID_DEVINTERFACE_NET,
+				dwMemberIdx, &DevIntfData);
+
+			if (GetLastError() == ERROR_NO_MORE_ITEMS)
+				break;
+
+			DevData.cbSize = sizeof(DevData);
+
+			SetupDiGetDeviceInterfaceDetail(
+				hDevInfo, &DevIntfData, NULL, 0, &dwSize, NULL);
+
+			DevIntfDetailData = (PSP_DEVICE_INTERFACE_DETAIL_DATA)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dwSize);
+			DevIntfDetailData->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA);
+
+			if (SetupDiGetDeviceInterfaceDetail(hDevInfo, &DevIntfData,
+				DevIntfDetailData, dwSize, &dwSize, &DevData))
+			{
+				if (!SetupDiGetDeviceRegistryPropertyA (hDevInfo, &DevData, SPDRP_DEVICEDESC, NULL, lpData, sizeof(lpData), &dwSize))
+				{
+					HeapFree(GetProcessHeap(), 0, DevIntfDetailData);
+					continue;
+				}
+
+				if (strcmp((const char *)lpData, (const char *)row.bDescr))
+				{
+					HeapFree(GetProcessHeap(), 0, DevIntfDetailData);
+					continue;
+				}
+
+				SP_DRVINFO_DATA driverInfoData = {0};
+				driverInfoData.cbSize = sizeof(driverInfoData);
+
+				SP_DEVINSTALL_PARAMS deviceInstallParams = {0};
+				deviceInstallParams.cbSize = sizeof(deviceInstallParams);
+
+				if (SetupDiGetDeviceInstallParams(hDevInfo, &DevData, &deviceInstallParams))
+				{
+					deviceInstallParams.FlagsEx |= (DI_FLAGSEX_INSTALLEDDRIVER | DI_FLAGSEX_ALLOWEXCLUDEDDRVS);
+
+					if (SetupDiSetDeviceInstallParams(hDevInfo, &DevData, &deviceInstallParams))
+					{
+						if (SetupDiBuildDriverInfoList(hDevInfo, &DevData, SPDIT_COMPATDRIVER))
+						{
+							if (SetupDiEnumDriverInfo(hDevInfo, &DevData, SPDIT_COMPATDRIVER, 0, &driverInfoData))
+							{
+								SYSTEMTIME systemTime;
+								FileTimeToSystemTime (&driverInfoData.DriverDate, &systemTime);
+
+								StringCbPrintf (interfaceInfo, sizeof(interfaceInfo), L"%s (%s, v%llu.%llu.%llu.%llu, %04d-%02d-%02d)", driverInfoData.Description, driverInfoData.ProviderName,
+									(driverInfoData.DriverVersion >> 48) & 0xffff, 
+									(driverInfoData.DriverVersion >> 32) & 0xffff, 
+									(driverInfoData.DriverVersion >> 16) & 0xffff, 
+									(driverInfoData.DriverVersion >> 0) & 0xffff,
+									systemTime.wYear,
+									systemTime.wMonth,
+									systemTime.wDay);
+
+								SetDlgItemText (hwndMain, IDC_INTERFACE, interfaceInfo);
+
+								SetupDiDestroyDeviceInfoList(hDevInfo);
+								return 0;
+							}
+							else
+							{
+								//MessageBox (hwndMain, L"SetupDiEnumDriverInfo", NULL, MB_OK);
+								HeapFree(GetProcessHeap(), 0, DevIntfDetailData);
+								continue;
+							}
+						}
+						else
+						{
+							//MessageBox (hwndMain, L"SetupDiBuildDriverInfoList", NULL, MB_OK);
+							HeapFree(GetProcessHeap(), 0, DevIntfDetailData);
+							continue;
+						}
+					}
+					else
+					{
+						//MessageBox (hwndMain, L"SetupDiSetDeviceInstallParams", NULL, MB_OK);
+						HeapFree(GetProcessHeap(), 0, DevIntfDetailData);
+						continue;
+					}
+				}
+				else
+				{
+					//MessageBox (hwndMain, L"SetupDiGetDeviceInstallParams", NULL, MB_OK);
+					HeapFree(GetProcessHeap(), 0, DevIntfDetailData);
+					continue;
+				}
+			}
+
+			HeapFree(GetProcessHeap(), 0, DevIntfDetailData);
+			SetupDiDestroyDeviceInfoList(hDevInfo);
+			return 1;
+		}
+
+		SetupDiDestroyDeviceInfoList(hDevInfo);
+	}
+	else
+	{
+		//MessageBox (hwndMain, L"SetupDiGetClassDevs", NULL, MB_OK);
+	}
+
+	//MessageBox (hwndMain, L"None found", NULL, MB_OK);
+
+	return 1;
+}
+
+DWORD WINAPI CheckForBadAppsThread (VOID *arg)
+{
+	LPVOID drivers[1024];
+	DWORD cbNeeded;
+	int i;
+
+	if (EnumDeviceDrivers(drivers, sizeof(drivers), &cbNeeded) && cbNeeded < sizeof(drivers))
+	{
+		TCHAR szDriver[MAX_PATH];
+		int numDrivers = cbNeeded / sizeof(drivers[0]);
+
+		for (i = 0; i < numDrivers; i++)
+		{
+			if (GetDeviceDriverBaseName(drivers[i], szDriver, _countof(szDriver)))
+			{
+				wchar_t *p;
+
+				p = wcsrchr(szDriver, '\\');
+				if (p)
+					p++;
+				else
+					p = szDriver;
+
+				wcslwr(p);
+				if (!wcscmp(p, L"ndisrd.sys"))
+				{
+					MessageBox(hwndMain, L"Realtek LAN Optimizer is active on this system. LAN Optimizer is known to cause networking issues and may be responsible for poor upload results and other problems.\n\nIt is recommended that you uninstall LAN Optimizer for the best results.", L"Compatibility Warning", MB_ICONEXCLAMATION);
+					return 1;
+				}
+
+			}
+		}
+	}
+
+	return 0;
+}
 
 void ProcMainInit (HWND hDlg)
 {
+	DWORD threadID;
 	hwndMain = hDlg;
+
+	CreateThread (NULL, 0, CheckForBadAppsThread, NULL, 0, &threadID);
+	CreateThread (NULL, 0, CheckNetworkDriverThread, NULL, 0, &threadID);
 
 	hCursorHand = LoadCursor(0, IDC_HAND);
 
@@ -755,7 +950,7 @@ unsigned int __stdcall ScreenshotThread(void *arg)
 
 #define BOUNDARY_TEXT "------------TwitchTestIsAwesome"
 
-	HINTERNET hInternet = InternetOpen(L"TwitchTest/1.21", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+	HINTERNET hInternet = InternetOpen(L"TwitchTest/1.3", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 
 	HINTERNET hConnect = InternetConnect(hInternet, L"api.imgur.com", INTERNET_DEFAULT_HTTPS_PORT, nullptr, nullptr, INTERNET_SERVICE_HTTP, INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
 	if (!hConnect)
@@ -902,7 +1097,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 	int read = 0;
 	DWORD ret;
 
-	hInternet = InternetOpen(L"TwitchTest/1.22", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+	hInternet = InternetOpen(L"TwitchTest/1.3", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 
 	hConnect = InternetOpenUrl(hInternet, L"https://api.twitch.tv/kraken/ingests", L"Accept: */*\nClient-ID: mme8bj93xsju8hte7jd9vctbf79lmec", -1L, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
 
@@ -940,8 +1135,6 @@ unsigned int __stdcall BandwidthTest(void *arg)
 		MessageBox(hwndMain, L"Failed to parse Twitch ingest list.", L"Error", MB_ICONERROR);
 		goto terribleProblems;
 	}
-
-	SendMessage(hwndMain, WM_APP + 10, json_array_size(ingests), 0);
 
 	indexOrder = (int *)malloc(json_array_size(ingests) * sizeof(int));
 	for (i = 0; i < (int)json_array_size(ingests); i++)
