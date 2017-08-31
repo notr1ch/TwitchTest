@@ -62,7 +62,7 @@
       <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>setupapi.lib;psapi.lib;crypt32.lib;gdiplus.lib;winmm.lib;comctl32.lib;Iphlpapi.lib;jansson.lib;wininet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>setupapi.lib;psapi.lib;crypt32.lib;gdiplus.lib;winmm.lib;comctl32.lib;Iphlpapi.lib;r1jansson.lib;wininet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -88,7 +88,7 @@
       <ControlFlowGuard>Guard</ControlFlowGuard>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>setupapi.lib;psapi.lib;crypt32.lib;gdiplus.lib;;winmm.lib;comctl32.lib;Iphlpapi.lib;jansson.lib;wininet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>setupapi.lib;psapi.lib;crypt32.lib;gdiplus.lib;;winmm.lib;comctl32.lib;Iphlpapi.lib;r1jansson.lib;wininet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
@@ -99,6 +99,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="blake2b-ref.c" />
     <ClCompile Include="D:\C-apps\TwitchBWTest\librtmp\amf.c" />
     <ClCompile Include="D:\C-apps\TwitchBWTest\librtmp\cencode.c" />
     <ClCompile Include="D:\C-apps\TwitchBWTest\librtmp\hashswf.c" />
