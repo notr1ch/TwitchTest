@@ -8,3 +8,6 @@ TwitchTest creates a test stream to Twitch, using the "?bandwidthtest" option so
 Requires Administrator privileges to run, as the Windows TCP connection metrics API is only available to applications running as administrator.
 
 A pre-compiled binary for Windows can be downloaded at [Releases](https://github.com/MrArca9/TwitchTest/releases/tag/1.3.A.0). Requires the [VS2015 x86 redistributable](https://www.microsoft.com/en-us/download/details.aspx?id=48145#4baacbe7-a8a1-8091-5597-393c6b9ace67).
+
+Please note:
+The EXE is going to trigger smartscreen on windows because of the way windows scans executables. Click on "More Info" and "Run Anyway" to run the program. As the EXE gets downloaded more the reputation with windows will go up, and eventually this warning will disappear.
