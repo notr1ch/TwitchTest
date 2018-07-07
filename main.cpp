@@ -8,7 +8,7 @@ of the License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
 See the GNU General Public License for more details.
 
@@ -22,6 +22,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define NTDDI_VERSION NTDDI_VISTASP1
 
 #include <stdlib.h>
+#include <iostream>
+#include <sstream>
 #include <string.h>
 #include <stdio.h>
 #include <process.h>
@@ -32,7 +34,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <windows.h>
 #include <gdiplus.h>
 #include <Wininet.h>
-#include <jansson.h>
 #include <strsafe.h>
 #include <iphlpapi.h>
 #include <Tcpestats.h>
@@ -46,7 +47,10 @@ using namespace Gdiplus;
 
 extern "C" {
 #include "librtmp/rtmp.h"
-extern uint64_t connectTime;
+	extern uint64_t connectTime;
+}
+extern "C" {
+#include "jansson/jansson.h"
 }
 
 #include "resource.h"
@@ -124,12 +128,13 @@ static const AVal av_NetStream_Play_Start = AVC("NetStream.Play.Start");
 static const AVal av_Started_playing = AVC("Started playing");
 static const AVal av_NetStream_Play_Stop = AVC("NetStream.Play.Stop");
 static const AVal av_Stopped_playing = AVC("Stopped playing");
-
 static const AVal av_OBSVersion = AVC("TwitchTest/1.3");
 static const AVal av_setDataFrame = AVC("@setDataFrame");
+static json_t *ingests;
+static int *indexOrder = NULL;
 
 
-DWORD WINAPI CheckNetworkDriverThread (VOID *arg)
+DWORD WINAPI CheckNetworkDriverThread(VOID *arg)
 {
 	HDEVINFO                         hDevInfo;
 	SP_DEVICE_INTERFACE_DATA         DevIntfData;
@@ -187,7 +192,7 @@ DWORD WINAPI CheckNetworkDriverThread (VOID *arg)
 			if (SetupDiGetDeviceInterfaceDetail(hDevInfo, &DevIntfData,
 				DevIntfDetailData, dwSize, &dwSize, &DevData))
 			{
-				if (!SetupDiGetDeviceRegistryPropertyA (hDevInfo, &DevData, SPDRP_DEVICEDESC, NULL, lpData, sizeof(lpData), &dwSize))
+				if (!SetupDiGetDeviceRegistryPropertyA(hDevInfo, &DevData, SPDRP_DEVICEDESC, NULL, lpData, sizeof(lpData), &dwSize))
 				{
 					HeapFree(GetProcessHeap(), 0, DevIntfDetailData);
 					continue;
@@ -199,10 +204,10 @@ DWORD WINAPI CheckNetworkDriverThread (VOID *arg)
 					continue;
 				}
 
-				SP_DRVINFO_DATA driverInfoData = {0};
+				SP_DRVINFO_DATA driverInfoData = { 0 };
 				driverInfoData.cbSize = sizeof(driverInfoData);
 
-				SP_DEVINSTALL_PARAMS deviceInstallParams = {0};
+				SP_DEVINSTALL_PARAMS deviceInstallParams = { 0 };
 				deviceInstallParams.cbSize = sizeof(deviceInstallParams);
 
 				if (SetupDiGetDeviceInstallParams(hDevInfo, &DevData, &deviceInstallParams))
@@ -216,18 +221,18 @@ DWORD WINAPI CheckNetworkDriverThread (VOID *arg)
 							if (SetupDiEnumDriverInfo(hDevInfo, &DevData, SPDIT_COMPATDRIVER, 0, &driverInfoData))
 							{
 								SYSTEMTIME systemTime;
-								FileTimeToSystemTime (&driverInfoData.DriverDate, &systemTime);
+								FileTimeToSystemTime(&driverInfoData.DriverDate, &systemTime);
 
-								StringCbPrintf (interfaceInfo, sizeof(interfaceInfo), L"%s (%s, v%llu.%llu.%llu.%llu, %04d-%02d-%02d)", driverInfoData.Description, driverInfoData.ProviderName,
-									(driverInfoData.DriverVersion >> 48) & 0xffff, 
-									(driverInfoData.DriverVersion >> 32) & 0xffff, 
-									(driverInfoData.DriverVersion >> 16) & 0xffff, 
+								StringCbPrintf(interfaceInfo, sizeof(interfaceInfo), L"%s (%s, v%llu.%llu.%llu.%llu, %04d-%02d-%02d)", driverInfoData.Description, driverInfoData.ProviderName,
+									(driverInfoData.DriverVersion >> 48) & 0xffff,
+									(driverInfoData.DriverVersion >> 32) & 0xffff,
+									(driverInfoData.DriverVersion >> 16) & 0xffff,
 									(driverInfoData.DriverVersion >> 0) & 0xffff,
 									systemTime.wYear,
 									systemTime.wMonth,
 									systemTime.wDay);
 
-								SetDlgItemText (hwndMain, IDC_INTERFACE, interfaceInfo);
+								SetDlgItemText(hwndMain, IDC_INTERFACE, interfaceInfo);
 
 								SetupDiDestroyDeviceInfoList(hDevInfo);
 								return 0;
@@ -278,7 +283,7 @@ DWORD WINAPI CheckNetworkDriverThread (VOID *arg)
 	return 1;
 }
 
-DWORD WINAPI CheckForBadAppsThread (VOID *arg)
+DWORD WINAPI CheckForBadAppsThread(VOID *arg)
 {
 	LPVOID drivers[1024];
 	DWORD cbNeeded;
@@ -315,13 +320,13 @@ DWORD WINAPI CheckForBadAppsThread (VOID *arg)
 	return 0;
 }
 
-void ProcMainInit (HWND hDlg)
+void ProcMainInit(HWND hDlg)
 {
 	DWORD threadID;
 	hwndMain = hDlg;
 
-	CreateThread (NULL, 0, CheckForBadAppsThread, NULL, 0, &threadID);
-	CreateThread (NULL, 0, CheckNetworkDriverThread, NULL, 0, &threadID);
+	CreateThread(NULL, 0, CheckForBadAppsThread, NULL, 0, &threadID);
+	CreateThread(NULL, 0, CheckNetworkDriverThread, NULL, 0, &threadID);
 
 	hCursorHand = LoadCursor(0, IDC_HAND);
 
@@ -369,10 +374,10 @@ void ProcMainInit (HWND hDlg)
 
 	SendDlgItemMessage(hDlg, IDC_LIST, LVM_SETEXTENDEDLISTVIEWSTYLE, (WPARAM)0, (LPARAM)LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
 
-	SendDlgItemMessage(hDlg, IDC_EU, BM_SETCHECK, BST_CHECKED, 0);
-	SendDlgItemMessage(hDlg, IDC_US, BM_SETCHECK, BST_CHECKED, 0);
-	SendDlgItemMessage(hDlg, IDC_ASIA, BM_SETCHECK, BST_CHECKED, 0);
-	SendDlgItemMessage(hDlg, IDC_OTHER, BM_SETCHECK, BST_CHECKED, 0);
+	SendDlgItemMessage(hDlg, IDC_EU, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hDlg, IDC_US, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hDlg, IDC_ASIA, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hDlg, IDC_OTHER, BM_SETCHECK, BST_UNCHECKED, 0);
 
 	i = SendDlgItemMessage(hDlg, IDC_DURATION, CB_ADDSTRING, 0, (LPARAM)L"Ping Only");
 	SendDlgItemMessage(hDlg, IDC_DURATION, CB_SETITEMDATA, i, 0);
@@ -424,11 +429,12 @@ void ProcMainInit (HWND hDlg)
 
 	col.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT;
 	col.fmt = LVCFMT_LEFT;
+	ListView_SetExtendedListViewStyle(GetDlgItem(hDlg, IDC_LIST), LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT);
 
-	col.pszText = L"Server";	 col.iOrder = 0; col.cx = 150; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 0, &col);
-	col.pszText = L"Bandwidth";  col.iOrder = 1; col.cx = 80; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 1, &col);
-	col.pszText = L"RTT";		col.iOrder = 2; col.cx = 60; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 2, &col);
-	col.pszText = L"Quality";	col.iOrder = 3; col.cx = 60; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 3, &col);
+	col.pszText = L"Server";	 col.iOrder = 1; col.cx = 150; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 0, &col);
+	col.pszText = L"(Avg) Bandwidth";  col.iOrder = 2; col.cx = 80; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 1, &col);
+	col.pszText = L"RTT";		col.iOrder = 3; col.cx = 60; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 2, &col);
+	col.pszText = L"Quality";	col.iOrder = 4; col.cx = 60; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 3, &col);
 
 	SendMessage(hDlg, WM_CHANGEUISTATE, MAKEWPARAM(UIS_SET, UISF_HIDEFOCUS), 0);
 
@@ -441,256 +447,7 @@ void ProcMainInit (HWND hDlg)
 
 	ShowWindow(hDlg, SW_SHOWNORMAL);
 }
-
-// FIXME: use the actual OBS socket loop at some point to fully emulate network conditions
-
-/*
-void SetupSendBacklogEvent()
-{
-	zero(&sendBacklogOverlapped, sizeof(sendBacklogOverlapped));
-
-	ResetEvent(hSendBacklogEvent);
-	sendBacklogOverlapped.hEvent = hSendBacklogEvent;
-
-	idealsendbacklognotify(rtmp->m_sb.sb_socket, &sendBacklogOverlapped, NULL);
-}
-
-void SocketLoop(RTMP *rtmp)
-{
-	BOOL canWrite = FALSE;
-
-	int delayTime;
-	int latencyPacketSize;
-	DWORD lastSendTime = 0;
-
-	WSANETWORKEVENTS networkEvents;
-
-	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
-
-	WSAEventSelect(rtmp->m_sb.sb_socket, hWriteEvent, FD_READ | FD_WRITE | FD_CLOSE);
-
-	SetupSendBacklogEvent();
-
-	HANDLE hObjects[3];
-
-	hObjects[0] = hWriteEvent;
-	hObjects[1] = hBufferEvent;
-	hObjects[2] = hSendBacklogEvent;
-
-	for (;;)
-	{
-		if (bStopping && WaitForSingleObject(hSocketLoopExit, 0) != WAIT_TIMEOUT)
-		{
-			OSEnterMutex(hDataBufferMutex);
-			if (curDataBufferLen == 0)
-			{
-				//OSDebugOut (TEXT("Exiting on empty buffer.\n"));
-				OSLeaveMutex(hDataBufferMutex);
-				break;
-			}
-
-			//OSDebugOut (TEXT("Want to exit, but %d bytes remain.\n"), curDataBufferLen);
-			OSLeaveMutex(hDataBufferMutex);
-		}
-
-		int status = WaitForMultipleObjects(3, hObjects, FALSE, INFINITE);
-		if (status == WAIT_ABANDONED || status == WAIT_FAILED)
-		{
-			Log(TEXT("RTMPPublisher::SocketLoop: Aborting due to WaitForMultipleObjects failure"));
-			App->PostStopMessage();
-			return;
-		}
-
-		if (status == WAIT_OBJECT_0)
-		{
-			//Socket event
-			if (WSAEnumNetworkEvents(rtmp->m_sb.sb_socket, NULL, &networkEvents))
-			{
-				Log(TEXT("RTMPPublisher::SocketLoop: Aborting due to WSAEnumNetworkEvents failure, %d"), WSAGetLastError());
-				App->PostStopMessage();
-				return;
-			}
-
-			if (networkEvents.lNetworkEvents & FD_WRITE)
-				canWrite = true;
-
-			if (networkEvents.lNetworkEvents & FD_CLOSE)
-			{
-				if (lastSendTime)
-				{
-					DWORD diff = OSGetTime() - lastSendTime;
-					Log(TEXT("RTMPPublisher::SocketLoop: Received FD_CLOSE, %u ms since last send (buffer: %d / %d)"), diff, curDataBufferLen, dataBufferSize);
-				}
-
-				if (bStopping)
-					Log(TEXT("RTMPPublisher::SocketLoop: Aborting due to FD_CLOSE during shutdown, %d bytes lost, error %d"), curDataBufferLen, networkEvents.iErrorCode[FD_CLOSE_BIT]);
-				else
-					Log(TEXT("RTMPPublisher::SocketLoop: Aborting due to FD_CLOSE, error %d"), networkEvents.iErrorCode[FD_CLOSE_BIT]);
-				FatalSocketShutdown();
-				return;
-			}
-
-			if (networkEvents.lNetworkEvents & FD_READ)
-			{
-				BYTE discard[16384];
-				int ret, errorCode;
-				BOOL fatalError = FALSE;
-
-				for (;;)
-				{
-					ret = recv(rtmp->m_sb.sb_socket, (char *)discard, sizeof(discard), 0);
-					if (ret == -1)
-					{
-						errorCode = WSAGetLastError();
-
-						if (errorCode == WSAEWOULDBLOCK)
-							break;
-
-						fatalError = TRUE;
-					}
-					else if (ret == 0)
-					{
-						errorCode = 0;
-						fatalError = TRUE;
-					}
-
-					if (fatalError)
-					{
-						Log(TEXT("RTMPPublisher::SocketLoop: Socket error, recv() returned %d, GetLastError() %d"), ret, errorCode);
-						FatalSocketShutdown();
-						return;
-					}
-				}
-			}
-		}
-		else if (status == WAIT_OBJECT_0 + 2)
-		{
-			//Ideal send backlog event
-			ULONG idealSendBacklog;
-
-			if (!idealsendbacklogquery(rtmp->m_sb.sb_socket, &idealSendBacklog))
-			{
-				int curTCPBufSize, curTCPBufSizeSize = sizeof(curTCPBufSize);
-				if (!getsockopt(rtmp->m_sb.sb_socket, SOL_SOCKET, SO_SNDBUF, (char *)&curTCPBufSize, &curTCPBufSizeSize))
-				{
-					if (curTCPBufSize < (int)idealSendBacklog)
-					{
-						int bufferSize = (int)idealSendBacklog;
-						setsockopt(rtmp->m_sb.sb_socket, SOL_SOCKET, SO_SNDBUF, (const char *)&bufferSize, sizeof(bufferSize));
-						Log(TEXT("RTMPPublisher::SocketLoop: Increasing send buffer to ISB %d (buffer: %d / %d)"), idealSendBacklog, curDataBufferLen, dataBufferSize);
-					}
-				}
-				else
-					Log(TEXT("RTMPPublisher::SocketLoop: Got hSendBacklogEvent but getsockopt() returned %d"), WSAGetLastError());
-			}
-			else
-				Log(TEXT("RTMPPublisher::SocketLoop: Got hSendBacklogEvent but WSAIoctl() returned %d"), WSAGetLastError());
-
-			SetupSendBacklogEvent();
-			continue;
-		}
-
-		if (canWrite)
-		{
-			bool exitLoop = false;
-			do
-			{
-				OSEnterMutex(hDataBufferMutex);
-
-				if (!curDataBufferLen)
-				{
-					//this is now an expected occasional condition due to use of auto-reset events, we could end up emptying the buffer
-					//as it's filled in a previous loop cycle, especially if using low latency mode.
-					OSLeaveMutex(hDataBufferMutex);
-					//Log(TEXT("RTMPPublisher::SocketLoop: Trying to send, but no data available?!"));
-					break;
-				}
-
-				int ret;
-				if (lowLatencyMode != LL_MODE_NONE)
-				{
-					int sendLength = min(latencyPacketSize, curDataBufferLen);
-					ret = send(rtmp->m_sb.sb_socket, (const char *)dataBuffer, sendLength, 0);
-				}
-				else
-				{
-					ret = send(rtmp->m_sb.sb_socket, (const char *)dataBuffer, curDataBufferLen, 0);
-				}
-
-				if (ret > 0)
-				{
-					if (curDataBufferLen - ret)
-						memmove(dataBuffer, dataBuffer + ret, curDataBufferLen - ret);
-					curDataBufferLen -= ret;
-
-					bytesSent += ret;
-
-					if (lastSendTime)
-					{
-						DWORD diff = OSGetTime() - lastSendTime;
-
-						if (diff >= 1500)
-							Log(TEXT("RTMPPublisher::SocketLoop: Stalled for %u ms to write %d bytes (buffer: %d / %d), unstable connection?"), diff, ret, curDataBufferLen, dataBufferSize);
-
-						totalSendPeriod += diff;
-						totalSendBytes += ret;
-						totalSendCount++;
-					}
-
-					lastSendTime = OSGetTime();
-
-					SetEvent(hBufferSpaceAvailableEvent);
-				}
-				else
-				{
-					int errorCode;
-					BOOL fatalError = FALSE;
-
-					if (ret == -1)
-					{
-						errorCode = WSAGetLastError();
-
-						if (errorCode == WSAEWOULDBLOCK)
-						{
-							canWrite = false;
-							OSLeaveMutex(hDataBufferMutex);
-							break;
-						}
-
-						fatalError = TRUE;
-					}
-					else if (ret == 0)
-					{
-						errorCode = 0;
-						fatalError = TRUE;
-					}
-
-					if (fatalError)
-					{
-						//connection closed, or connection was aborted / socket closed / etc, that's a fatal error for us.
-						Log(TEXT("RTMPPublisher::SocketLoop: Socket error, send() returned %d, GetLastError() %d"), ret, errorCode);
-						OSLeaveMutex(hDataBufferMutex);
-						FatalSocketShutdown();
-						return;
-					}
-				}
-
-				//finish writing for now
-				if (curDataBufferLen <= 1000)
-					exitLoop = true;
-
-				OSLeaveMutex(hDataBufferMutex);
-
-				if (delayTime)
-					Sleep(delayTime);
-			} while (!exitLoop);
-		}
-	}
-
-	Log(TEXT("RTMPPublisher::SocketLoop: Graceful loop exit"));
-}*/
-
-DWORD GetTcpRow(u_short localPort,u_short remotePort, MIB_TCP_STATE state, __out PMIB_TCPROW row)
+DWORD GetTcpRow(u_short localPort, u_short remotePort, MIB_TCP_STATE state, __out PMIB_TCPROW row)
 {
 	PMIB_TCPTABLE tcpTable = NULL;
 	PMIB_TCPROW tcpRowIt = NULL;
@@ -735,7 +492,7 @@ DWORD GetTcpRow(u_short localPort,u_short remotePort, MIB_TCP_STATE state, __out
 
 void SendRTMPMetadata(RTMP *rtmp)
 {
-	char metadata[2048] = {0};
+	char metadata[2048] = { 0 };
 	char *enc = metadata + RTMP_MAX_HEADER_SIZE, *pend = metadata + sizeof(metadata) - RTMP_MAX_HEADER_SIZE;
 
 	enc = AMF_EncodeString(enc, pend, &av_setDataFrame);
@@ -823,21 +580,21 @@ int GetServerMasks(void)
 
 	if (SendDlgItemMessage(hwndMain, IDC_OTHER, BM_GETCHECK, 0, 0) == BST_CHECKED)
 		mask += MASK_OTHER;
-	
+
 	return mask;
 }
 
 int ServerIsFiltered(const char *name, int mask)
 {
-	if (!strncmp (name, "EU:", 3))
+	if (!strncmp(name, "EU:", 3))
 	{
 		if (mask & MASK_EU)
 			return 0;
 		else
 			return 1;
 	}
-	
-	if (!strncmp (name, "US ", 3))
+
+	if (!strncmp(name, "US ", 3))
 	{
 		if (mask & MASK_US)
 			return 0;
@@ -852,7 +609,7 @@ int ServerIsFiltered(const char *name, int mask)
 		else
 			return 1;
 	}
-	
+
 	if (mask & MASK_OTHER)
 		return 0;
 
@@ -899,7 +656,7 @@ unsigned int __stdcall ScreenshotThread(void *arg)
 
 	SetDlgItemText(hwndMain, IDC_SHARE, L"Uploading...");
 
-	GetWindowRect  (hwndMain, &rect);
+	GetWindowRect(hwndMain, &rect);
 
 	int width = rect.right - rect.left;
 	int height = rect.bottom - rect.top;
@@ -920,9 +677,9 @@ unsigned int __stdcall ScreenshotThread(void *arg)
 	wchar_t tempPath[MAX_PATH];
 	wchar_t tempFileName[MAX_PATH];
 
-	GetTempPath (_countof(tempPath), tempPath);
+	GetTempPath(_countof(tempPath), tempPath);
 
-	GetTempFileName (tempPath, L"twt", 0, tempFileName);
+	GetTempFileName(tempPath, L"twt", 0, tempFileName);
 	image->Save(tempFileName, &myClsId, NULL);
 	delete image;
 
@@ -930,23 +687,23 @@ unsigned int __stdcall ScreenshotThread(void *arg)
 	DeleteDC(hDC);
 
 	HANDLE hFile;
-	hFile = CreateFile (tempFileName, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, nullptr);
+	hFile = CreateFile(tempFileName, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, nullptr);
 	if (hFile == INVALID_HANDLE_VALUE)
 		goto failure;
 
 	LARGE_INTEGER fileSize;
 	GetFileSizeEx(hFile, &fileSize);
 
-	BYTE *buff = (BYTE *)malloc (fileSize.QuadPart);
+	BYTE *buff = (BYTE *)malloc(fileSize.QuadPart);
 
 	DWORD read;
-	ReadFile (hFile, buff, fileSize.QuadPart, &read, nullptr);
+	ReadFile(hFile, buff, fileSize.QuadPart, &read, nullptr);
 	if (read != fileSize.QuadPart)
 		goto failure;
 
-	CloseHandle (hFile);
+	CloseHandle(hFile);
 
-	DeleteFile (tempFileName);
+	DeleteFile(tempFileName);
 
 #define BOUNDARY_TEXT "------------TwitchTestIsAwesome"
 
@@ -958,7 +715,7 @@ unsigned int __stdcall ScreenshotThread(void *arg)
 
 	LPCWSTR acceptTypes[] = { L"*/*", NULL };
 
-	HINTERNET hRequest = HttpOpenRequest (hConnect, L"POST", L"/3/image", L"HTTP/1.1", nullptr, acceptTypes, INTERNET_FLAG_NO_UI | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+	HINTERNET hRequest = HttpOpenRequest(hConnect, L"POST", L"/3/image", L"HTTP/1.1", nullptr, acceptTypes, INTERNET_FLAG_NO_UI | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE, 0);
 	if (!hRequest)
 		goto failure;
 
@@ -971,29 +728,29 @@ unsigned int __stdcall ScreenshotThread(void *arg)
 
 	DWORD requestLength = (DWORD)fileSize.QuadPart + strlen(prefix) + strlen(suffix);
 
-	BYTE *request = (BYTE *)malloc (requestLength);
+	BYTE *request = (BYTE *)malloc(requestLength);
 
-	CopyMemory (request, prefix, strlen(prefix));
-	CopyMemory (request + strlen(prefix), buff, fileSize.QuadPart);
-	CopyMemory (request + strlen(prefix) + fileSize.QuadPart, suffix, strlen(suffix));
+	CopyMemory(request, prefix, strlen(prefix));
+	CopyMemory(request + strlen(prefix), buff, fileSize.QuadPart);
+	CopyMemory(request + strlen(prefix) + fileSize.QuadPart, suffix, strlen(suffix));
 
 	wchar_t headers[1024];
 
-	wsprintf (headers, L"Content-Type: multipart/form-data; boundary=" BOUNDARY_TEXT "\r\nAuthorization: Client-ID " IMGUR_CLIENT_ID "\r\nContent-Length: %u", requestLength);
+	wsprintf(headers, L"Content-Type: multipart/form-data; boundary=" BOUNDARY_TEXT "\r\nAuthorization: Client-ID " IMGUR_CLIENT_ID "\r\nContent-Length: %u", requestLength);
 
 	int ret = HttpSendRequest(hRequest, headers, 0, request, requestLength);
-	free (request);
+	free(request);
 
 	if (!ret)
 		goto failure;
 
 	char response[16384];
-	InternetReadFile (hRequest, response, sizeof(response), &read);
+	InternetReadFile(hRequest, response, sizeof(response), &read);
 	if (!read)
 		goto failure;
 
 	response[read] = 0;
-	
+
 	json_t *link;
 
 	const char *url;
@@ -1012,11 +769,11 @@ unsigned int __stdcall ScreenshotThread(void *arg)
 
 	url = json_string_value(link);
 
-	if (!strncmp (url, "https://", 8) && !strncmp (url, "http://", 7))
+	if (!strncmp(url, "https://", 8) && !strncmp(url, "http://", 7))
 		goto failure;
 
 	ShellExecuteA(hwndMain, "open", url, NULL, 0, SW_SHOWNORMAL);
-	EnableWindow (GetDlgItem(hwndMain, IDC_SHARE), TRUE);
+	EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), TRUE);
 	SetDlgItemText(hwndMain, IDC_SHARE, L"Share Result");
 
 	if (root)
@@ -1028,75 +785,21 @@ failure:
 	if (root)
 		json_decref(root);
 
-	MessageBox (hwndMain, L"Uploading image for sharing failed :(", L"Upload Error", MB_ICONERROR);
+	MessageBox(hwndMain, L"Uploading image for sharing failed :(", L"Upload Error", MB_ICONERROR);
 	EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), TRUE);
 	SetDlgItemText(hwndMain, IDC_SHARE, L"Share Result");
 	return 1;
 }
 
-unsigned int __stdcall BandwidthTest(void *arg)
-{
+unsigned int __stdcall PopulateList() {
 	int i;
-	int tcpBufferSize;
-	int *indexOrder = NULL;
-	RTMP *rtmp;
 	json_t *root = NULL;
 	json_error_t error = { 0 };
-	RTMPPacket packet = { 0 };
-	MIB_TCPROW row = { 0 };
-
-	i = SendDlgItemMessage(hwndMain, IDC_COMBO1, CB_GETCURSEL, 0, 0);
-	if (i == -1)
-	{
-		ThreadID = 0;
-		goto terribleProblems;
-	}
-
-	int serverMasks = GetServerMasks();
-
-	int j = SendDlgItemMessage(hwndMain, IDC_DURATION, CB_GETCURSEL, 0, 0);
-	int TEST_DURATION = SendDlgItemMessage(hwndMain, IDC_DURATION, CB_GETITEMDATA, j, 0);
-
-	char keyBuffer[256], *key = NULL;
-	keyBuffer[0] = 0;
-
-	SendDlgItemMessageA(hwndMain, IDC_EDIT1, WM_GETTEXT, sizeof(keyBuffer), (LPARAM)keyBuffer);
-
-	if (!keyBuffer[0] && TEST_DURATION)
-	{
-		ThreadID = 0;
-		goto terribleProblems;
-	}
-
-	char *p = keyBuffer;
-	while (*p && isspace(*p))
-		p++;
-
-	key = p;
-
-	while (*p)
-	{
-		if (isspace(*p))
-		{
-			*p = 0;
-			break;
-		}
-		p++;
-	}
-
-	int len = strlen(keyBuffer) + 1 + 14;
-	key = (char *)malloc(len);
-
-	strcpy_s(key, len, keyBuffer);
-	strcat_s(key, len, "?bandwidthtest");
-
-	timeBeginPeriod(1);
-
 	HINTERNET hConnect, hInternet;
 	char buff[65536];
 	int read = 0;
 	DWORD ret;
-
+	int serverMasks = GetServerMasks();
 	hInternet = InternetOpen(L"TwitchTest/1.3", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 
 	hConnect = InternetOpenUrl(hInternet, L"https://api.twitch.tv/kraken/ingests", L"Accept: */*\nClient-ID: mme8bj93xsju8hte7jd9vctbf79lmec", -1L, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
@@ -1115,7 +818,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 			InternetCloseHandle(hConnect);
 			InternetCloseHandle(hInternet);
 			MessageBox(hwndMain, L"Failed to download Twitch ingest list.", L"Error", MB_ICONERROR);
-			goto terribleProblems;
+			return 0;
 		}
 	}
 
@@ -1129,21 +832,21 @@ unsigned int __stdcall BandwidthTest(void *arg)
 	if (!json_is_object(root))
 		_endthreadex(2);
 
-	json_t *ingests = json_object_get(root, "ingests");
+	ingests = json_object_get(root, "ingests");
 	if (!ingests || !json_array_size(ingests))
 	{
 		MessageBox(hwndMain, L"Failed to parse Twitch ingest list.", L"Error", MB_ICONERROR);
-		goto terribleProblems;
+		return 0;
 	}
 
 	indexOrder = (int *)malloc(json_array_size(ingests) * sizeof(int));
 	for (i = 0; i < (int)json_array_size(ingests); i++)
 		indexOrder[i] = i;
 
-	qsort_s (indexOrder, json_array_size(ingests), sizeof(*indexOrder), jsonServerSort, ingests);
+	qsort_s(indexOrder, json_array_size(ingests), sizeof(*indexOrder), jsonServerSort, ingests);
 
 	SendDlgItemMessage(hwndMain, IDC_LIST, LVM_DELETEALLITEMS, 0, 0);
-	
+
 	int index = 0;
 	for (i = 0; i < (int)json_array_size(ingests); i++)
 	{
@@ -1176,25 +879,77 @@ unsigned int __stdcall BandwidthTest(void *arg)
 		SendDlgItemMessage(hwndMain, IDC_LIST, LVM_INSERTITEM, 0, (LPARAM)(const LPLVITEM)&lvItem);
 		index++;
 	}
+}
 
-	index = 0;
+
+unsigned int __stdcall BandwidthTest(void *arg)
+{
+	
+	int tcpBufferSize;
+	json_t *root = NULL;
+	RTMP *rtmp;
+	json_error_t error = { 0 };
+	RTMPPacket packet = { 0 };
+	MIB_TCPROW row = { 0 };
+	int serverMasks = GetServerMasks();
+	int i = SendDlgItemMessage(hwndMain, IDC_COMBO1, CB_GETCURSEL, 0, 0);
+	if (i == -1)
+	{
+		ThreadID = 0;
+		goto terribleProblems;
+	}
+
+
+	int j = SendDlgItemMessage(hwndMain, IDC_DURATION, CB_GETCURSEL, 0, 0);
+	int TEST_DURATION = SendDlgItemMessage(hwndMain, IDC_DURATION, CB_GETITEMDATA, j, 0);
+	char keyBuffer[256], *key = NULL;
+	keyBuffer[0] = 0;
+	SendDlgItemMessageA(hwndMain, IDC_EDIT1, WM_GETTEXT, sizeof(keyBuffer), (LPARAM)keyBuffer);
+	if (!keyBuffer[0] && TEST_DURATION)
+	{
+		ThreadID = 0;
+		goto terribleProblems;
+	}
+
+	char *p = keyBuffer;
+	while (*p && isspace(*p))
+		p++;
+
+	key = p;
+
+	while (*p)
+	{
+		if (isspace(*p))
+		{
+			*p = 0;
+			break;
+		}
+		p++;
+	}
+
+	int len = strlen(keyBuffer) + 1 + 14;
+	key = (char *)malloc(len);
+
+	strcpy_s(key, len, keyBuffer);
+	strcat_s(key, len, "?bandwidthtest");
+
+	timeBeginPeriod(1);
+	int index = 0;
+	HWND m_list = GetDlgItem(hwndMain, IDC_LIST);
 	for (i = 0; i < (int)json_array_size(ingests); i++)
 	{
 		json_t *server;
 		json_t *serverName;
 		json_t *url;
-
 		WSAEVENT hIdealSend = NULL;
-
 		int failed = 0;
-
 		const char *strURL, *strServerName;
 
 		server = json_array_get(ingests, indexOrder[i]);
 
 		serverName = json_object_get(server, "name");
 		strServerName = json_string_value(serverName);
-		
+
 		if (ServerIsFiltered(strServerName, serverMasks))
 			continue;
 
@@ -1207,14 +962,20 @@ unsigned int __stdcall BandwidthTest(void *arg)
 			continue;
 		else
 			*end = 0;
-
+		bool checked = ListView_GetCheckState(m_list, index);
+		if (!checked)
+		{
+			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, L"Skipped");
+			if (i == (int)json_array_size(ingests) - 1) {
+				break;
+			}
+			index++;
+			continue;
+		}
 		ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, L"Testing...");
-
 		int j = SendDlgItemMessage(hwndMain, IDC_COMBO1, CB_GETCURSEL, 0, 0);
 		tcpBufferSize = SendDlgItemMessage(hwndMain, IDC_COMBO1, CB_GETITEMDATA, j, 0);
-
 		rtmp = RTMP_Alloc();
-
 		rtmp->m_inChunkSize = RTMP_DEFAULT_CHUNKSIZE;
 		rtmp->m_outChunkSize = RTMP_DEFAULT_CHUNKSIZE;
 		rtmp->m_bSendChunkSizeInfo = 1;
@@ -1256,7 +1017,6 @@ unsigned int __stdcall BandwidthTest(void *arg)
 			RTMP_Free(rtmp);
 
 			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, L"");
-
 			index++;
 
 			if (WaitForSingleObject(hAbortThreadEvent, 0) == WAIT_OBJECT_0)
@@ -1267,7 +1027,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
 		SOCKADDR_STORAGE clientSockName;
 		int nameLen = sizeof(SOCKADDR_STORAGE);
-		getsockname (rtmp->m_sb.sb_socket, (struct sockaddr *)&clientSockName, &nameLen);
+		getsockname(rtmp->m_sb.sb_socket, (struct sockaddr *)&clientSockName, &nameLen);
 		int clientPort = ((struct sockaddr_in *)(&clientSockName))->sin_port;
 
 		GetTcpRow(clientPort, htons(1935), MIB_TCP_STATE_ESTAB, (PMIB_TCPROW)&row);
@@ -1312,7 +1072,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 		SendRTMPMetadata(rtmp);
 
 		unsigned char junk[4096] = { 0xde };
-		
+
 		packet.m_nChannel = 0x05; // source channel
 		packet.m_packetType = RTMP_PACKET_TYPE_AUDIO;
 		packet.m_body = (char *)junk + RTMP_MAX_HEADER_SIZE;
@@ -1361,7 +1121,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 			}
 
 			uint64_t diff = timeGetTime() - nowTime;
-			
+
 			sendTime += diff;
 			sendCount++;
 
@@ -1384,7 +1144,6 @@ unsigned int __stdcall BandwidthTest(void *arg)
 					Sleep(10);
 				}
 			}
-
 			if (startTime && nowTime - lastUpdateTime > 500)
 			{
 				wchar_t buff[256];
@@ -1396,10 +1155,9 @@ unsigned int __stdcall BandwidthTest(void *arg)
 				}
 				else
 				{
-					StringCbPrintf (buff, sizeof(buff), L"%d kbps", (int)speed);
+					StringCbPrintf(buff, sizeof(buff), L"%d kbps", (int)speed);
 					ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, buff);
 				}
-
 				if (nowTime - startTime > TEST_DURATION)
 					break;
 
@@ -1489,10 +1247,8 @@ terribleProblems:
 		free(key);
 
 	timeEndPeriod(1);
-
 	SetDlgItemText(hwndMain, IDOK, L"Start");
 	ThreadID = 0;
-
 	EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), TRUE);
 	EnableWindow(GetDlgItem(hwndMain, IDC_US), TRUE);
 	EnableWindow(GetDlgItem(hwndMain, IDC_EU), TRUE);
@@ -1519,7 +1275,7 @@ VOID SaveSettings(VOID)
 		DATA_BLOB blobOut;
 
 		GetDlgItemText(hwndMain, IDC_EDIT1, temp, _countof(temp) - 1);
-		
+
 		blobIn.pbData = (BYTE *)temp;
 		blobIn.cbData = (wcslen(temp) + 1) * sizeof(wchar_t);
 
@@ -1529,7 +1285,7 @@ VOID SaveSettings(VOID)
 			LocalFree(blobOut.pbData);
 		}
 
-		RegCloseKey (hk);
+		RegCloseKey(hk);
 	}
 }
 
@@ -1537,125 +1293,135 @@ LRESULT CALLBACK ProcMain(HWND hDlg, UINT message, UINT wParam, LONG lParam)
 {
 	switch (message)
 	{
-		case WM_INITDIALOG:
-			ProcMainInit(hDlg);
-			return FALSE;
+	case WM_INITDIALOG:
+		ProcMainInit(hDlg);
+		return FALSE;
 
 		//case WM_QUERYUISTATE:
 			//return UISF_HIDEFOCUS;
 
-		case WM_CHANGEUISTATE:
+	case WM_CHANGEUISTATE:
+	{
+		// Disable focus rectangles by setting or masking out the flag where appropriate. 
+		switch (LOWORD(wParam))
 		{
-			// Disable focus rectangles by setting or masking out the flag where appropriate. 
-			switch (LOWORD(wParam))
-			{
-			case UIS_SET:
-				wParam |= UISF_HIDEFOCUS << 16;
-				break;
-			case UIS_CLEAR:
-			case UIS_INITIALIZE:
-				wParam &= ~(UISF_HIDEFOCUS << 16);
-				break;
-			}
-		}
-		break;
-
-		case WM_COMMAND :
-			switch (LOWORD(wParam))
-			{
-				case IDOK:
-					if (HIWORD(wParam) == BN_CLICKED)
-					{
-						if (ThreadID)
-						{
-							SetEvent(hAbortThreadEvent);
-							EnableWindow(GetDlgItem(hwndMain, IDOK), FALSE);
-							return TRUE;
-						}
-
-						int j = SendDlgItemMessage(hwndMain, IDC_DURATION, CB_GETCURSEL, 0, 0);
-						int TEST_DURATION = SendDlgItemMessage(hwndMain, IDC_DURATION, CB_GETITEMDATA, j, 0);
-
-						if (SendDlgItemMessageA(hwndMain, IDC_EDIT1, WM_GETTEXTLENGTH, 0, 0) == 0 && TEST_DURATION > 0)
-						{
-							MessageBox(hDlg, L"Please enter your Twitch stream key.", L"Error", MB_ICONEXCLAMATION);
-						}
-						else if (GetServerMasks() == 0)
-						{
-							MessageBox(hDlg, L"Please choose at least one region to test.", L"Error", MB_ICONEXCLAMATION);
-						}
-						else
-						{
-							ResetEvent(hAbortThreadEvent);
-							SetDlgItemText(hwndMain, IDOK, L"Abort");
-							//EnableWindow(GetDlgItem(hwndMain, IDOK), FALSE);
-							EnableWindow(GetDlgItem(hwndMain, IDC_US), FALSE);
-							EnableWindow(GetDlgItem(hwndMain, IDC_EU), FALSE);
-							EnableWindow(GetDlgItem(hwndMain, IDC_ASIA), FALSE);
-							EnableWindow(GetDlgItem(hwndMain, IDC_OTHER), FALSE);
-							EnableWindow(GetDlgItem(hwndMain, IDC_EDIT1), FALSE);
-							EnableWindow(GetDlgItem(hwndMain, IDC_COMBO1), FALSE);
-							EnableWindow(GetDlgItem(hwndMain, IDC_DURATION), FALSE);
-							EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), FALSE);
-							_beginthreadex (NULL, 0, (_beginthreadex_proc_type)BandwidthTest, NULL, 0, &ThreadID);
-						}
-					}
-					return TRUE;
-
-				case IDC_SHARE:
-					unsigned int dummy;
-					EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), FALSE);
-					_beginthreadex(NULL, 0, (_beginthreadex_proc_type)ScreenshotThread, NULL, 0, &dummy);
-					return TRUE;
-
-				case IDC_EXIT:
-					if (HIWORD(wParam) == BN_CLICKED)
-						DestroyWindow (hwndMain);
-					return TRUE;
-				case IDC_GETKEY:
-					if (HIWORD(wParam) == BN_CLICKED)
-						ShellExecute(hDlg, L"open", L"https://www.twitch.tv/broadcast/dashboard/streamkey", NULL, NULL, SW_SHOWNORMAL);
-			}
+		case UIS_SET:
+			wParam |= UISF_HIDEFOCUS << 16;
 			break;
-		case WM_SETCURSOR:
-			if ((HWND)wParam == GetDlgItem(hDlg, IDC_GETKEY))
+		case UIS_CLEAR:
+		case UIS_INITIALIZE:
+			wParam &= ~(UISF_HIDEFOCUS << 16);
+			break;
+		}
+	}
+	break;
+	case WM_COMMAND:
+		switch (LOWORD(wParam))
+		{
+			//A command was fired, which one?
+		case IDC_US:
+			PopulateList();
+			break;
+		case IDC_EU:
+			PopulateList();
+			break;
+		case IDC_OTHER:
+			PopulateList();
+			break;
+		case IDC_ASIA:
+			PopulateList();
+			break;
+		case IDOK:
+			if (HIWORD(wParam) == BN_CLICKED)
 			{
-				SetCursor(hCursorHand);
-				SetWindowLongPtr(hDlg, DWLP_MSGRESULT, TRUE);
-				return TRUE;
-			}
-			return FALSE;
-
-		case WM_CTLCOLORSTATIC:
-			{
-				if ((HWND)lParam == GetDlgItem(hDlg, IDC_GETKEY))
+				if (ThreadID)
 				{
-					HDC hdcStatic = (HDC)wParam;
-					SetBkMode (hdcStatic, TRANSPARENT);
-					SetTextColor(hdcStatic, RGB(0, 0, 255));
-					return (LRESULT)GetSysColorBrush(COLOR_MENU);
+					SetEvent(hAbortThreadEvent);
+					EnableWindow(GetDlgItem(hwndMain, IDOK), FALSE);
+					return TRUE;
+				}
+
+				int j = SendDlgItemMessage(hwndMain, IDC_DURATION, CB_GETCURSEL, 0, 0);
+				int TEST_DURATION = SendDlgItemMessage(hwndMain, IDC_DURATION, CB_GETITEMDATA, j, 0);
+
+				if (SendDlgItemMessageA(hwndMain, IDC_EDIT1, WM_GETTEXTLENGTH, 0, 0) == 0 && TEST_DURATION > 0)
+				{
+					MessageBox(hDlg, L"Please enter your Twitch stream key.", L"Error", MB_ICONEXCLAMATION);
+				}
+				else if (GetServerMasks() == 0)
+				{
+					MessageBox(hDlg, L"Please choose at least one region to test.", L"Error", MB_ICONEXCLAMATION);
+				}
+				else
+				{
+					ResetEvent(hAbortThreadEvent);
+					SetDlgItemText(hwndMain, IDOK, L"Abort");
+					//EnableWindow(GetDlgItem(hwndMain, IDOK), FALSE);
+					EnableWindow(GetDlgItem(hwndMain, IDC_US), FALSE);
+					EnableWindow(GetDlgItem(hwndMain, IDC_EU), FALSE);
+					EnableWindow(GetDlgItem(hwndMain, IDC_ASIA), FALSE);
+					EnableWindow(GetDlgItem(hwndMain, IDC_OTHER), FALSE);
+					EnableWindow(GetDlgItem(hwndMain, IDC_EDIT1), FALSE);
+					EnableWindow(GetDlgItem(hwndMain, IDC_COMBO1), FALSE);
+					EnableWindow(GetDlgItem(hwndMain, IDC_DURATION), FALSE);
+					EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), FALSE);
+					_beginthreadex(NULL, 0, (_beginthreadex_proc_type)BandwidthTest, NULL, 0, &ThreadID);
 				}
 			}
-			break;
-
-		case WM_DESTROY:
-			SaveSettings();
-			PostQuitMessage (0);
+			return TRUE;
+		case IDC_SHARE:
+			unsigned int dummy;
+			EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), FALSE);
+			_beginthreadex(NULL, 0, (_beginthreadex_proc_type)ScreenshotThread, NULL, 0, &dummy);
 			return TRUE;
 
-		case WM_CLOSE:
-			DestroyWindow (hwndMain);
+		case IDC_EXIT:
+			if (HIWORD(wParam) == BN_CLICKED)
+				DestroyWindow(hwndMain);
 			return TRUE;
+		case IDC_GETKEY:
+			if (HIWORD(wParam) == BN_CLICKED)
+				ShellExecute(hDlg, L"open", L"https://www.twitch.tv/broadcast/dashboard/streamkey", NULL, NULL, SW_SHOWNORMAL);
+		}
+		break;
+	case WM_SETCURSOR:
+		if ((HWND)wParam == GetDlgItem(hDlg, IDC_GETKEY))
+		{
+			SetCursor(hCursorHand);
+			SetWindowLongPtr(hDlg, DWLP_MSGRESULT, TRUE);
+			return TRUE;
+		}
+		return FALSE;
+
+	case WM_CTLCOLORSTATIC:
+	{
+		if ((HWND)lParam == GetDlgItem(hDlg, IDC_GETKEY))
+		{
+			HDC hdcStatic = (HDC)wParam;
+			SetBkMode(hdcStatic, TRANSPARENT);
+			SetTextColor(hdcStatic, RGB(0, 0, 255));
+			return (LRESULT)GetSysColorBrush(COLOR_MENU);
+		}
+	}
+	break;
+
+	case WM_DESTROY:
+		SaveSettings();
+		PostQuitMessage(0);
+		return TRUE;
+
+	case WM_CLOSE:
+		DestroyWindow(hwndMain);
+		return TRUE;
 	}
 
 	return FALSE;
 }
-
 //
 // Entry point
 //
-int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance,
-					LPSTR lpszCmdLine, int nCmdShow)
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
+	LPSTR lpszCmdLine, int nCmdShow)
 {
 	HWND Myhwnd;
 	MSG	  msg;
@@ -1674,7 +1440,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
 
 	//create window
-	Myhwnd = CreateDialog (hThisInstance, MAKEINTRESOURCE(IDD_DIALOG1), 0, (DLGPROC)ProcMain);
+	Myhwnd = CreateDialog(hThisInstance, MAKEINTRESOURCE(IDD_DIALOG1), 0, (DLGPROC)ProcMain);
 
 	if (!Myhwnd)
 	{
@@ -1683,18 +1449,18 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	}
 
 	//set icon
-	hIcon = (HICON)LoadImage(	hThisInstance,
-								MAKEINTRESOURCE(IDI_ICON2),
-								IMAGE_ICON,
-								GetSystemMetrics(SM_CXSMICON),
-								GetSystemMetrics(SM_CYSMICON),
-								0);
+	hIcon = (HICON)LoadImage(hThisInstance,
+		MAKEINTRESOURCE(IDI_ICON2),
+		IMAGE_ICON,
+		GetSystemMetrics(SM_CXSMICON),
+		GetSystemMetrics(SM_CYSMICON),
+		0);
 
-	if(hIcon)
+	if (hIcon)
 		SendMessage(hwndMain, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
 
 	// Main message loop:
-	while (GetMessage(&msg, NULL, 0, 0)) 
+	while (GetMessage(&msg, NULL, 0, 0))
 	{
 		if (!IsDialogMessage(hwndMain, &msg))
 		{
