@@ -7,4 +7,4 @@ TwitchTest creates a test stream to Twitch, using the "?bandwidthtest" option so
 
 Requires Administrator privileges to run, as the Windows TCP connection metrics API is only available to applications running as administrator.
 
-A pre-compiled binary for Windows can be downloaded at https://r-1.ch/TwitchTest.zip. Requires the [VS2015 x86 redistributable](https://www.microsoft.com/en-us/download/details.aspx?id=48145#4baacbe7-a8a1-8091-5597-393c6b9ace67).
+A pre-compiled binary for Windows can be downloaded at https://r1ch.net/projects/twitchtest.
