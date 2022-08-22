@@ -1,5 +1,5 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
       <Configuration>Debug</Configuration>
@@ -14,17 +14,18 @@
     <ProjectName>TwitchTest</ProjectName>
     <ProjectGuid>{50AF660B-5BB1-43E9-A716-5D131B1F9358}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
-    <PlatformToolset>v140</PlatformToolset>
+    <PlatformToolset>v142</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
     <WholeProgramOptimization>true</WholeProgramOptimization>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
-    <PlatformToolset>v140</PlatformToolset>
+    <PlatformToolset>v142</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
@@ -53,7 +54,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>IMGUR_CLIENT_ID="d6a825b0998ab3b";WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MinimalRebuild>true</MinimalRebuild>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
@@ -62,7 +63,7 @@
       <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>setupapi.lib;psapi.lib;crypt32.lib;gdiplus.lib;winmm.lib;comctl32.lib;Iphlpapi.lib;r1jansson.lib;wininet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>setupapi.lib;psapi.lib;crypt32.lib;gdiplus.lib;winmm.lib;comctl32.lib;Iphlpapi.lib;jansson.lib;wininet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ProgramDatabaseFile>$(OutDir)$(TargetName).pdb</ProgramDatabaseFile>
       <SubSystem>Windows</SubSystem>
@@ -74,7 +75,7 @@
     <ClCompile>
       <Optimization>MinSpace</Optimization>
       <OmitFramePointers>true</OmitFramePointers>
-      <PreprocessorDefinitions>IMGUR_CLIENT_ID="d6a825b0998ab3b";WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StringPooling>true</StringPooling>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <BufferSecurityCheck>true</BufferSecurityCheck>
@@ -88,7 +89,7 @@
       <ControlFlowGuard>Guard</ControlFlowGuard>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>setupapi.lib;psapi.lib;crypt32.lib;gdiplus.lib;;winmm.lib;comctl32.lib;Iphlpapi.lib;r1jansson.lib;wininet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>setupapi.lib;psapi.lib;crypt32.lib;gdiplus.lib;;winmm.lib;comctl32.lib;Iphlpapi.lib;jansson.lib;wininet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <SubSystem>Windows</SubSystem>
@@ -97,16 +98,19 @@
       <TargetMachine>MachineX86</TargetMachine>
       <UACExecutionLevel>HighestAvailable</UACExecutionLevel>
     </Link>
+    <Manifest>
+      <EnableDpiAwareness>true</EnableDpiAwareness>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="blake2b-ref.c" />
-    <ClCompile Include="D:\C-apps\TwitchBWTest\librtmp\amf.c" />
-    <ClCompile Include="D:\C-apps\TwitchBWTest\librtmp\cencode.c" />
-    <ClCompile Include="D:\C-apps\TwitchBWTest\librtmp\hashswf.c" />
-    <ClCompile Include="D:\C-apps\TwitchBWTest\librtmp\log.c" />
-    <ClCompile Include="D:\C-apps\TwitchBWTest\librtmp\md5.c" />
-    <ClCompile Include="D:\C-apps\TwitchBWTest\librtmp\parseurl.c" />
-    <ClCompile Include="D:\C-apps\TwitchBWTest\librtmp\rtmp.c" />
+    <ClCompile Include="librtmp\amf.c" />
+    <ClCompile Include="librtmp\cencode.c" />
+    <ClCompile Include="librtmp\hashswf.c" />
+    <ClCompile Include="librtmp\log.c" />
+    <ClCompile Include="librtmp\md5.c" />
+    <ClCompile Include="librtmp\parseurl.c" />
+    <ClCompile Include="librtmp\rtmp.c" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -116,7 +120,7 @@
     <ResourceCompile Include="twichtest.rc" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="small.ico" />
+    <Image Include="twitchtest.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -26,6 +26,8 @@
 #define IDC_SHARE                       1022
 #define IDC_INTERFACE                   1023
 #define IDC_INTERFACE2                  1024
+#define IDC_US2                         1024
+#define IDC_SA                          1024
 
 // Next default values for new objects
 // 

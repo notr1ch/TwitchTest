@@ -46,6 +46,8 @@ using namespace Gdiplus;
 
 extern "C" {
 #include "librtmp/rtmp.h"
+#include "blake2.h"
+#include "blake2-impl.h"
 extern uint64_t connectTime;
 }
 
@@ -61,7 +63,7 @@ LRESULT CALLBACK	WndProc(HWND, UINT, WPARAM, LPARAM);
 HWND hwndMain;
 unsigned int ThreadID;
 HANDLE hAbortThreadEvent;
-
+int buttonState = 0;
 HCURSOR hCursorHand;
 
 // librtmp stuff
@@ -125,9 +127,16 @@ static const AVal av_Started_playing = AVC("Started playing");
 static const AVal av_NetStream_Play_Stop = AVC("NetStream.Play.Stop");
 static const AVal av_Stopped_playing = AVC("Stopped playing");
 
-static const AVal av_OBSVersion = AVC("TwitchTest/1.3");
+static const AVal av_OBSVersion = AVC("TwitchTest/1.52");
 static const AVal av_setDataFrame = AVC("@setDataFrame");
 
+int disable_data_upload = 0;
+int interface_type = 0;
+
+json_t *ingests = NULL;
+int *indexOrder = NULL;
+
+DWORD WINAPI DownloadTwitchServers(void *arg);
 
 DWORD WINAPI CheckNetworkDriverThread (VOID *arg)
 {
@@ -160,6 +169,8 @@ DWORD WINAPI CheckNetworkDriverThread (VOID *arg)
 		//MessageBox (hwndMain, L"GetBestRoute", NULL, MB_OK);
 		return 1;
 	}
+
+	interface_type = row.dwType;
 
 	hDevInfo = SetupDiGetClassDevs(
 		&GUID_DEVINTERFACE_NET, NULL, 0, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
@@ -322,6 +333,7 @@ void ProcMainInit (HWND hDlg)
 
 	CreateThread (NULL, 0, CheckForBadAppsThread, NULL, 0, &threadID);
 	CreateThread (NULL, 0, CheckNetworkDriverThread, NULL, 0, &threadID);
+	CreateThread (NULL, 0, DownloadTwitchServers, NULL, 0, &threadID);
 
 	hCursorHand = LoadCursor(0, IDC_HAND);
 
@@ -363,21 +375,25 @@ void ProcMainInit (HWND hDlg)
 	i = SendDlgItemMessage(hDlg, IDC_COMBO1, CB_ADDSTRING, 0, (LPARAM)L"4M");
 	SendDlgItemMessage(hDlg, IDC_COMBO1, CB_SETITEMDATA, i, 1048576 * 4);
 
-	SendDlgItemMessage(hDlg, IDC_COMBO1, CB_SETCURSEL, 0, 0);
+	SendDlgItemMessage(hDlg, IDC_COMBO1, CB_SETCURSEL, 5, 0);
 
 	InvalidateRect(GetDlgItem(hDlg, IDC_GETKEY), NULL, FALSE);
 
-	SendDlgItemMessage(hDlg, IDC_LIST, LVM_SETEXTENDEDLISTVIEWSTYLE, (WPARAM)0, (LPARAM)LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+	SendDlgItemMessage(hDlg, IDC_LIST, LVM_SETEXTENDEDLISTVIEWSTYLE, (WPARAM)0, (LPARAM)LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_CHECKBOXES);
 
-	SendDlgItemMessage(hDlg, IDC_EU, BM_SETCHECK, BST_CHECKED, 0);
-	SendDlgItemMessage(hDlg, IDC_US, BM_SETCHECK, BST_CHECKED, 0);
-	SendDlgItemMessage(hDlg, IDC_ASIA, BM_SETCHECK, BST_CHECKED, 0);
-	SendDlgItemMessage(hDlg, IDC_OTHER, BM_SETCHECK, BST_CHECKED, 0);
+	SendDlgItemMessage(hDlg, IDC_EU, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hDlg, IDC_US, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hDlg, IDC_SA, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hDlg, IDC_ASIA, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hDlg, IDC_OTHER, BM_SETCHECK, BST_UNCHECKED, 0);
 
 	i = SendDlgItemMessage(hDlg, IDC_DURATION, CB_ADDSTRING, 0, (LPARAM)L"Ping Only");
 	SendDlgItemMessage(hDlg, IDC_DURATION, CB_SETITEMDATA, i, 0);
 
-	i = SendDlgItemMessage(hDlg, IDC_DURATION, CB_ADDSTRING, 0, (LPARAM)L"Quick (10 secs)");
+	i = SendDlgItemMessage(hDlg, IDC_DURATION, CB_ADDSTRING, 0, (LPARAM)L"Burst");
+	SendDlgItemMessage(hDlg, IDC_DURATION, CB_SETITEMDATA, i, 1000);
+
+	i = SendDlgItemMessage(hDlg, IDC_DURATION, CB_ADDSTRING, 0, (LPARAM)L"Short (10 secs)");
 	SendDlgItemMessage(hDlg, IDC_DURATION, CB_SETITEMDATA, i, 10000);
 
 	i = SendDlgItemMessage(hDlg, IDC_DURATION, CB_ADDSTRING, 0, (LPARAM)L"Medium (30 secs)");
@@ -398,7 +414,7 @@ void ProcMainInit (HWND hDlg)
 	i = SendDlgItemMessage(hDlg, IDC_DURATION, CB_ADDSTRING, 0, (LPARAM)L"5 minutes");
 	SendDlgItemMessage(hDlg, IDC_DURATION, CB_SETITEMDATA, i, 300000);
 
-	SendDlgItemMessage(hDlg, IDC_DURATION, CB_SETCURSEL, 1, 0);
+	SendDlgItemMessage(hDlg, IDC_DURATION, CB_SETCURSEL, 2, 0);
 
 	DATA_BLOB blobIn;
 	DATA_BLOB blobOut;
@@ -425,7 +441,7 @@ void ProcMainInit (HWND hDlg)
 	col.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT;
 	col.fmt = LVCFMT_LEFT;
 
-	col.pszText = L"Server";	 col.iOrder = 0; col.cx = 150; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 0, &col);
+	col.pszText = L"Server";	 col.iOrder = 0; col.cx = 270; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 0, &col);
 	col.pszText = L"Bandwidth";  col.iOrder = 1; col.cx = 80; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 1, &col);
 	col.pszText = L"RTT";		col.iOrder = 2; col.cx = 60; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 2, &col);
 	col.pszText = L"Quality";	col.iOrder = 3; col.cx = 60; ListView_InsertColumn(GetDlgItem(hDlg, IDC_LIST), 3, &col);
@@ -807,29 +823,57 @@ void SetupSendEvent(HANDLE hEvent, OVERLAPPED *sendBacklogOverlapped, RTMP *rtmp
 #define MASK_US	 2
 #define MASK_ASIA   4
 #define MASK_OTHER  8
+#define MASK_SA  16
 
-int GetServerMasks(void)
+int GetServerMasks(int controlID)
 {
 	int mask = 0;
 
-	if (SendDlgItemMessage(hwndMain, IDC_EU, BM_GETCHECK, 0, 0) == BST_CHECKED)
-		mask += MASK_EU;
+	if (!controlID)
+	{
+		if (SendDlgItemMessage(hwndMain, IDC_EU, BM_GETCHECK, 0, 0) == BST_CHECKED)
+			mask += MASK_EU;
 
-	if (SendDlgItemMessage(hwndMain, IDC_US, BM_GETCHECK, 0, 0) == BST_CHECKED)
-		mask += MASK_US;
+		if (SendDlgItemMessage(hwndMain, IDC_US, BM_GETCHECK, 0, 0) == BST_CHECKED)
+			mask += MASK_US;
 
-	if (SendDlgItemMessage(hwndMain, IDC_ASIA, BM_GETCHECK, 0, 0) == BST_CHECKED)
-		mask += MASK_ASIA;
+		if (SendDlgItemMessage(hwndMain, IDC_SA, BM_GETCHECK, 0, 0) == BST_CHECKED)
+			mask += MASK_SA;
 
-	if (SendDlgItemMessage(hwndMain, IDC_OTHER, BM_GETCHECK, 0, 0) == BST_CHECKED)
-		mask += MASK_OTHER;
+		if (SendDlgItemMessage(hwndMain, IDC_ASIA, BM_GETCHECK, 0, 0) == BST_CHECKED)
+			mask += MASK_ASIA;
+
+		if (SendDlgItemMessage(hwndMain, IDC_OTHER, BM_GETCHECK, 0, 0) == BST_CHECKED)
+			mask += MASK_OTHER;
+	}
+	else
+	{
+		switch (controlID)
+		{
+		case IDC_EU:
+			mask += MASK_EU;
+			break;
+		case IDC_US:
+			mask += MASK_US;
+			break;
+		case IDC_SA:
+			mask += MASK_SA;
+			break;
+		case IDC_OTHER:
+			mask += MASK_OTHER;
+			break;
+		case IDC_ASIA:
+			mask += MASK_ASIA;
+			break;
+		}
+	}
 	
 	return mask;
 }
 
 int ServerIsFiltered(const char *name, int mask)
 {
-	if (!strncmp (name, "EU:", 3))
+	if (!strncmp (name, "EU:", 3) || !strncmp (name, "Europe:", 7))
 	{
 		if (mask & MASK_EU)
 			return 0;
@@ -837,9 +881,17 @@ int ServerIsFiltered(const char *name, int mask)
 			return 1;
 	}
 	
-	if (!strncmp (name, "US ", 3))
+	if (!strncmp (name, "US ", 3) || !strncmp(name, "US:", 3) || !strncmp(name, "NA:", 3) || !strncmp(name, "North America:", 14))
 	{
 		if (mask & MASK_US)
+			return 0;
+		else
+			return 1;
+	}
+
+	if (!strncmp(name, "South America:", 14))
+	{
+		if (mask & MASK_SA)
 			return 0;
 		else
 			return 1;
@@ -889,6 +941,19 @@ int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
 	return -1;  // Failure
 }
 
+static void HashToString(const uint8_t *in, const int length, char *out)
+{
+	const char alphabet[] = "0123456789abcdef";
+
+	for (int i = 0; i != length; ++i) {
+		out[2 * i]     = alphabet[in[i] / 16];
+		out[2 * i + 1] = alphabet[in[i] % 16];
+	}
+
+	out[length * 2] = 0;
+}
+
+#ifdef IMGUR_CLIENT_ID
 unsigned int __stdcall ScreenshotThread(void *arg)
 {
 	HDC hDC = GetWindowDC(hwndMain);
@@ -950,7 +1015,7 @@ unsigned int __stdcall ScreenshotThread(void *arg)
 
 #define BOUNDARY_TEXT "------------TwitchTestIsAwesome"
 
-	HINTERNET hInternet = InternetOpen(L"TwitchTest/1.3", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+	HINTERNET hInternet = InternetOpen(L"TwitchTest/1.52", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
 
 	HINTERNET hConnect = InternetConnect(hInternet, L"api.imgur.com", INTERNET_DEFAULT_HTTPS_PORT, nullptr, nullptr, INTERNET_SERVICE_HTTP, INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
 	if (!hConnect)
@@ -993,6 +1058,9 @@ unsigned int __stdcall ScreenshotThread(void *arg)
 		goto failure;
 
 	response[read] = 0;
+
+	InternetCloseHandle(hRequest);
+	InternetCloseHandle(hConnect);
 	
 	json_t *link;
 
@@ -1033,15 +1101,184 @@ failure:
 	SetDlgItemText(hwndMain, IDC_SHARE, L"Share Result");
 	return 1;
 }
+#endif
+
+VOID ResetList (void)
+{
+	SendDlgItemMessage(hwndMain, IDC_LIST, LVM_DELETEALLITEMS, 0, 0);
+
+	for (int i = 0; i < (int)json_array_size(ingests); i++)
+	{
+		json_t *server;
+		json_t *serverName;
+
+		const char *strServerName;
+
+		server = json_array_get(ingests, indexOrder[i]);
+
+		serverName = json_object_get(server, "name");
+		strServerName = json_string_value(serverName);
+
+		LVITEM lvItem;
+		ZeroMemory(&lvItem, sizeof(lvItem));
+
+		lvItem.mask = LVIF_TEXT | LVIF_PARAM;
+
+		wchar_t szServerName[256];
+		MultiByteToWideChar(CP_UTF8, 0, strServerName, -1, szServerName, _countof(szServerName));
+
+		lvItem.pszText = szServerName;
+		lvItem.iSubItem = 0;
+		lvItem.lParam = indexOrder[i];
+		lvItem.iItem = i;
+		SendDlgItemMessage(hwndMain, IDC_LIST, LVM_INSERTITEM, 0, (LPARAM)(const LPLVITEM)&lvItem);
+	}
+
+	SendDlgItemMessage(hwndMain, IDC_ASIA, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hwndMain, IDC_EU, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hwndMain, IDC_US, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hwndMain, IDC_US2, BM_SETCHECK, BST_UNCHECKED, 0);
+	SendDlgItemMessage(hwndMain, IDC_OTHER, BM_SETCHECK, BST_UNCHECKED, 0);
+
+	EnableWindow(GetDlgItem(hwndMain, IDOK), TRUE);
+}
+
+DWORD WINAPI DownloadTwitchServers(void *arg)
+{
+	HINTERNET hConnect, hInternet;
+	char buff[65536];
+	int read = 0;
+	DWORD ret;
+	json_t *root;
+	json_error_t error = { 0 };
+
+	hInternet = InternetOpen(L"TwitchTest/1.52", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+
+	//hConnect = InternetOpenUrl(hInternet, L"https://api.twitch.tv/kraken/ingests", L"Accept: */*\nClient-ID: mme8bj93xsju8hte7jd9vctbf79lmec", -1L, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
+	hConnect = InternetOpenUrl(hInternet, L"https://ingest.twitch.tv/api/v2/ingests", L"Accept: */*\nClient-ID: mme8bj93xsju8hte7jd9vctbf79lmec", -1L, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
+
+	for (;;)
+	{
+		if (InternetReadFile(hConnect, buff + read, sizeof(buff) - read, &ret))
+		{
+			if (ret == 0)
+				break;
+
+			read += ret;
+		}
+		else
+		{
+			InternetCloseHandle(hConnect);
+			InternetCloseHandle(hInternet);
+			MessageBox(hwndMain, L"Failed to download Twitch ingest list.", L"Error", MB_ICONERROR);
+			goto terribleProblems;
+		}
+	}
+
+	buff[read] = 0;
+
+	InternetCloseHandle(hConnect);
+	InternetCloseHandle(hInternet);
+
+	root = json_loads(buff, 0, &error);
+
+	if (!json_is_object(root))
+	{
+		MessageBox(hwndMain, L"Failed to parse Twitch ingest list. Please see if there is an updated version of TwitchTest available.", L"Error", MB_ICONERROR);
+		goto terribleProblems;
+	}
+
+	ingests = json_object_get(root, "ingests");
+	if (!ingests || !json_array_size(ingests))
+	{
+		MessageBox(hwndMain, L"Failed to parse Twitch ingest list. Please see if there is an updated version of TwitchTest available.", L"Error", MB_ICONERROR);
+		goto terribleProblems;
+	}
+
+	for (int i = 0; i < (int)json_array_size(ingests); i++)
+	{
+		json_t *server;
+		json_t *serverName;
+
+		WSAEVENT hIdealSend = NULL;
+
+		int failed = 0;
+
+		const char *strServerName;
+
+		server = json_array_get(ingests, i);
+
+		serverName = json_object_get(server, "name");
+		strServerName = json_string_value(serverName);
+
+		if (strstr(strServerName, "DEPRECATED"))
+		{
+			json_array_remove(ingests, i);
+			i--;
+			continue;
+		}
+	}
+
+	indexOrder = (int *)malloc(json_array_size(ingests) * sizeof(int));
+	for (int i = 0; i < (int)json_array_size(ingests); i++)
+		indexOrder[i] = i;
+
+	qsort_s(indexOrder, json_array_size(ingests), sizeof(*indexOrder), jsonServerSort, ingests);
+
+	ResetList ();
+
+	return 0;
+
+terribleProblems:
+	
+	if (root)
+		json_decref(root);
+
+	return 1;
+}
+
+void SelectServersByRegion(int controlID)
+{
+	int option;
+
+	if (SendDlgItemMessage(hwndMain, controlID, BM_GETCHECK, 0, 0) == BST_CHECKED)
+		option = TRUE;
+	else
+		option = FALSE;
+
+	int serverMasks = GetServerMasks(controlID);
+
+	for (int i = 0; i < (int)json_array_size(ingests); i++)
+	{
+		json_t *server;
+		json_t *serverName;
+
+		WSAEVENT hIdealSend = NULL;
+
+		int failed = 0;
+
+		const char *strServerName;
+
+		server = json_array_get(ingests, indexOrder[i]);
+
+		serverName = json_object_get(server, "name");
+		strServerName = json_string_value(serverName);
+
+		if (!ServerIsFiltered(strServerName, serverMasks))
+		{
+			ListView_SetCheckState(GetDlgItem(hwndMain, IDC_LIST), i, option);
+		}
+
+		//json_decref(serverName);
+		//json_decref(server);
+	}
+}
 
 unsigned int __stdcall BandwidthTest(void *arg)
 {
 	int i;
 	int tcpBufferSize;
-	int *indexOrder = NULL;
 	RTMP *rtmp;
-	json_t *root = NULL;
-	json_error_t error = { 0 };
 	RTMPPacket packet = { 0 };
 	MIB_TCPROW row = { 0 };
 
@@ -1052,7 +1289,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 		goto terribleProblems;
 	}
 
-	int serverMasks = GetServerMasks();
+	int serverMasks = GetServerMasks(0);
 
 	int j = SendDlgItemMessage(hwndMain, IDC_DURATION, CB_GETCURSEL, 0, 0);
 	int TEST_DURATION = SendDlgItemMessage(hwndMain, IDC_DURATION, CB_GETITEMDATA, j, 0);
@@ -1092,93 +1329,17 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
 	timeBeginPeriod(1);
 
-	HINTERNET hConnect, hInternet;
-	char buff[65536];
-	int read = 0;
-	DWORD ret;
+	j = SendDlgItemMessage(hwndMain, IDC_COMBO1, CB_GETCURSEL, 0, 0);
+	tcpBufferSize = SendDlgItemMessage(hwndMain, IDC_COMBO1, CB_GETITEMDATA, j, 0);
 
-	hInternet = InternetOpen(L"TwitchTest/1.3", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+	json_t *eroot;
+	json_t *resultArray;
 
-	hConnect = InternetOpenUrl(hInternet, L"https://api.twitch.tv/kraken/ingests", L"Accept: */*\nClient-ID: mme8bj93xsju8hte7jd9vctbf79lmec", -1L, INTERNET_FLAG_RELOAD | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
+	eroot = json_object();
+	resultArray = json_array();
 
-	for (;;)
-	{
-		if (InternetReadFile(hConnect, buff + read, sizeof(buff) - read, &ret))
-		{
-			if (ret == 0)
-				break;
-
-			read += ret;
-		}
-		else
-		{
-			InternetCloseHandle(hConnect);
-			InternetCloseHandle(hInternet);
-			MessageBox(hwndMain, L"Failed to download Twitch ingest list.", L"Error", MB_ICONERROR);
-			goto terribleProblems;
-		}
-	}
-
-	buff[read] = 0;
-
-	InternetCloseHandle(hConnect);
-	InternetCloseHandle(hInternet);
-
-	root = json_loads(buff, 0, &error);
-
-	if (!json_is_object(root))
-		_endthreadex(2);
-
-	json_t *ingests = json_object_get(root, "ingests");
-	if (!ingests || !json_array_size(ingests))
-	{
-		MessageBox(hwndMain, L"Failed to parse Twitch ingest list.", L"Error", MB_ICONERROR);
-		goto terribleProblems;
-	}
-
-	indexOrder = (int *)malloc(json_array_size(ingests) * sizeof(int));
-	for (i = 0; i < (int)json_array_size(ingests); i++)
-		indexOrder[i] = i;
-
-	qsort_s (indexOrder, json_array_size(ingests), sizeof(*indexOrder), jsonServerSort, ingests);
-
-	SendDlgItemMessage(hwndMain, IDC_LIST, LVM_DELETEALLITEMS, 0, 0);
-	
-	int index = 0;
-	for (i = 0; i < (int)json_array_size(ingests); i++)
-	{
-		json_t *server;
-		json_t *serverName;
-
-		const char *strServerName;
-
-		server = json_array_get(ingests, indexOrder[i]);
-
-		serverName = json_object_get(server, "name");
-		strServerName = json_string_value(serverName);
-
-		if (ServerIsFiltered(strServerName, serverMasks))
-			continue;
-
-		LVITEM lvItem;
-		ZeroMemory(&lvItem, sizeof(lvItem));
-
-		lvItem.mask = LVIF_TEXT;
-
-		wchar_t szServerName[256];
-		MultiByteToWideChar(CP_UTF8, 0, strServerName, -1, szServerName, _countof(szServerName));
-
-		lvItem.pszText = szServerName;
-		lvItem.iSubItem = 0;
-		lvItem.lParam = 0;
-		lvItem.iItem = index;
-
-		SendDlgItemMessage(hwndMain, IDC_LIST, LVM_INSERTITEM, 0, (LPARAM)(const LPLVITEM)&lvItem);
-		index++;
-	}
-
-	index = 0;
-	for (i = 0; i < (int)json_array_size(ingests); i++)
+	//int index = 0;
+	/*for (i = 0; i < (int)json_array_size(ingests); i++)
 	{
 		json_t *server;
 		json_t *serverName;
@@ -1194,9 +1355,50 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
 		serverName = json_object_get(server, "name");
 		strServerName = json_string_value(serverName);
-		
+
 		if (ServerIsFiltered(strServerName, serverMasks))
+		{
+			//ListView_SetItemState LVGS_HIDDEN
+			//ListView_SetItemState (GetDlgItem(hwndMain, IDC_LIST), i, LVGS_HIDDEN, );
+			ListView_DeleteItem(GetDlgItem(hwndMain, IDC_LIST), i);
+		}
+	}*/
+
+	
+	for (i = 0; i < (int)json_array_size(ingests); i++)
+	{
+		if (!ListView_GetCheckState (GetDlgItem(hwndMain, IDC_LIST), i))
+		{
+			ListView_DeleteItem(GetDlgItem(hwndMain, IDC_LIST), i);
+			i--;
 			continue;
+		}
+	}
+
+	int numServers = ListView_GetItemCount (GetDlgItem(hwndMain, IDC_LIST));
+	for (i = 0; i < numServers; i++)
+	{
+		json_t *server;
+		json_t *serverName;
+		json_t *url;
+
+		WSAEVENT hIdealSend = NULL;
+
+		int failed = 0;
+
+		const char *strURL, *strServerName;
+
+		LVITEM lvItem = { 0 };
+		lvItem.mask = LVIF_PARAM;
+		lvItem.iItem = i;
+
+		if (!SendDlgItemMessage(hwndMain, IDC_LIST, LVM_GETITEM, 0, (LPARAM)(LPLVITEM)&lvItem))
+			continue;
+
+		server = json_array_get(ingests, lvItem.lParam);
+
+		serverName = json_object_get(server, "name");
+		strServerName = json_string_value(serverName);
 
 		url = json_object_get(server, "url_template");
 		strURL = json_string_value(url);
@@ -1208,10 +1410,12 @@ unsigned int __stdcall BandwidthTest(void *arg)
 		else
 			*end = 0;
 
-		ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, L"Testing...");
+		if (!ListView_GetCheckState (GetDlgItem(hwndMain, IDC_LIST), i))
+		{
+			continue;
+		}
 
-		int j = SendDlgItemMessage(hwndMain, IDC_COMBO1, CB_GETCURSEL, 0, 0);
-		tcpBufferSize = SendDlgItemMessage(hwndMain, IDC_COMBO1, CB_GETITEMDATA, j, 0);
+		ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), i, 1, L"Testing...");
 
 		rtmp = RTMP_Alloc();
 
@@ -1246,7 +1450,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
 		wchar_t buff[256];
 		StringCbPrintf(buff, sizeof(buff), L"%d ms", (int)connectTime);
-		ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 2, buff);
+		ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), i, 2, buff);
 
 		if (TEST_DURATION == 0)
 		{
@@ -1255,9 +1459,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
 			RTMP_Free(rtmp);
 
-			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, L"");
-
-			index++;
+			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), i, 1, L"");
 
 			if (WaitForSingleObject(hAbortThreadEvent, 0) == WAIT_OBJECT_0)
 				break;
@@ -1305,8 +1507,8 @@ unsigned int __stdcall BandwidthTest(void *arg)
 			hIdealSend = WSACreateEvent();
 			SetupSendEvent(hIdealSend, &sendBacklogOverlapped, rtmp);
 
-			tcpBufferSize = 65536;
-			setsockopt(rtmp->m_sb.sb_socket, SOL_SOCKET, SO_SNDBUF, (const char *)&tcpBufferSize, sizeof(tcpBufferSize));
+			int initTcpBufferSize = 65536;
+			setsockopt(rtmp->m_sb.sb_socket, SOL_SOCKET, SO_SNDBUF, (const char *)&initTcpBufferSize, sizeof(initTcpBufferSize));
 		}
 
 		SendRTMPMetadata(rtmp);
@@ -1392,12 +1594,12 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
 				if (wasCapped)
 				{
-					ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, L"10000+ kbps");
+					ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), i, 1, L"10000+ kbps");
 				}
 				else
 				{
 					StringCbPrintf (buff, sizeof(buff), L"%d kbps", (int)speed);
-					ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, buff);
+					ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), i, 1, buff);
 				}
 
 				if (nowTime - startTime > TEST_DURATION)
@@ -1408,7 +1610,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
 			if (WaitForSingleObject(hAbortThreadEvent, 0) == WAIT_OBJECT_0)
 			{
-				ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, L"Aborted.");
+				ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), i, 1, L"Aborted.");
 				break;
 			}
 		}
@@ -1423,7 +1625,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
 			/*wchar_t buff[256];
 			StringCbPrintf(buff, sizeof(buff), L"%d ms", (int)pathInfo.SmoothedRtt);
-			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 2, buff);*/
+			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), i, 2, buff);*/
 
 			int lost = pathInfo.FastRetran + pathInfo.PktsRetrans;
 
@@ -1432,20 +1634,31 @@ unsigned int __stdcall BandwidthTest(void *arg)
 				lost = 0;
 
 			StringCbPrintf(buff, sizeof(buff), L"%d", lost);
-			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 3, buff);
+			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), i, 3, buff);
+
+			if (WaitForSingleObject(hAbortThreadEvent, 0) == WAIT_TIMEOUT)
+			{
+				if (wasCapped)
+					speed = 10000;
+				json_t *result = json_pack("[siii]", myURL, (int)speed, (int)connectTime, lost);
+
+				json_array_append_new(resultArray, result);
+			}
 		}
 		else
 		{
-			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, L"Failed.");
+			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), i, 1, L"Failed.");
 		}
 
 	abortserver:
 
 		if (failed)
-			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), index, 1, L"Failed.");
+			ListView_SetItemText(GetDlgItem(hwndMain, IDC_LIST), i, 1, L"Failed.");
 
 		RTMP_DeleteStream(rtmp);
 
+		//twitch seems to ignore graceful shutdowns, just terminate it
+		/*
 		shutdown(rtmp->m_sb.sb_socket, SD_SEND);
 
 		//this waits for the socket shutdown to complete gracefully
@@ -1460,6 +1673,7 @@ unsigned int __stdcall BandwidthTest(void *arg)
 			else if (ret == -1)
 				break;
 		}
+		*/
 
 		RTMP_Close(rtmp);
 		closesocket(rtmp->m_sb.sb_socket);
@@ -1471,36 +1685,90 @@ unsigned int __stdcall BandwidthTest(void *arg)
 
 		free(myURL);
 
-		index++;
+		Sleep (500);
 
 		if (WaitForSingleObject(hAbortThreadEvent, 0) == WAIT_OBJECT_0)
 			break;
 	}
 
+#ifdef R1_API_KEY
+	if (!disable_data_upload && TEST_DURATION > 0 && json_array_size(resultArray) > 0)
+	{
+		uint8_t rawHash[20];
+		char hexHash[41];
+
+		blake2b_state state;
+		blake2b_init(&state, sizeof(rawHash));
+		blake2b_update(&state, key, strlen(key));
+		blake2b_final(&state, rawHash, sizeof(rawHash));
+
+		HashToString(rawHash, sizeof(rawHash), hexHash);
+
+		json_t *meta = json_object();
+		json_object_set_new(meta, "duration", json_integer(TEST_DURATION));
+		json_object_set_new(meta, "iftype", json_integer(interface_type));
+		json_object_set_new(meta, "sendbuffersize", json_integer(tcpBufferSize));
+		json_object_set_new(meta, "guid", json_string(hexHash));
+		json_object_set_new(meta, "key", json_string(R1_API_KEY));
+
+		json_object_set (eroot, "version", json_integer(2));
+		json_object_set (eroot, "settings", meta);
+		json_object_set (eroot, "results", resultArray);
+
+		char *json_dump = json_dumps (eroot, JSON_COMPACT);
+
+		HINTERNET hInternet = InternetOpen(L"TwitchTest/1.52", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
+
+		HINTERNET hConnect = InternetConnect(hInternet, L"api.r1ch.net", INTERNET_DEFAULT_HTTPS_PORT, nullptr, nullptr, INTERNET_SERVICE_HTTP, INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE | INTERNET_FLAG_NO_UI, 0);
+		if (hConnect)
+		{
+			LPCWSTR acceptTypes[] = { L"*/*", NULL };
+
+			HINTERNET hRequest = HttpOpenRequest (hConnect, L"POST", L"/twitchtest/result", L"HTTP/1.1", nullptr, acceptTypes, INTERNET_FLAG_NO_UI | INTERNET_FLAG_SECURE | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+			if (hRequest)
+			{
+				int ret = HttpSendRequest(hRequest, NULL, 0, json_dump, strlen(json_dump));
+
+				if (ret)
+				{
+					DWORD read;
+					char response[16384];
+					InternetReadFile (hRequest, response, sizeof(response), &read);
+					if (read)
+					{
+						response[read] = 0;
+
+						//we don't do anything with the response for the moment
+					}
+				}
+				InternetCloseHandle(hRequest);
+			}
+
+			InternetCloseHandle(hConnect);
+		}
+
+		json_decref(meta);
+	}
+#endif
+
+	json_decref(resultArray);
+	json_decref(eroot);
+
 terribleProblems:
 
-	if (root)
-		json_decref(root);
-
-	if (indexOrder)
-		free(indexOrder);
+	//if (indexOrder)
+	//	free(indexOrder);
 
 	if (key)
 		free(key);
 
 	timeEndPeriod(1);
 
-	SetDlgItemText(hwndMain, IDOK, L"Start");
+	buttonState = 2;
+	SetDlgItemText(hwndMain, IDOK, L"Reset");
 	ThreadID = 0;
 
 	EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), TRUE);
-	EnableWindow(GetDlgItem(hwndMain, IDC_US), TRUE);
-	EnableWindow(GetDlgItem(hwndMain, IDC_EU), TRUE);
-	EnableWindow(GetDlgItem(hwndMain, IDC_ASIA), TRUE);
-	EnableWindow(GetDlgItem(hwndMain, IDC_OTHER), TRUE);
-	EnableWindow(GetDlgItem(hwndMain, IDC_EDIT1), TRUE);
-	EnableWindow(GetDlgItem(hwndMain, IDC_COMBO1), TRUE);
-	EnableWindow(GetDlgItem(hwndMain, IDC_DURATION), TRUE);
 	EnableWindow(GetDlgItem(hwndMain, IDOK), TRUE);
 	return 0;
 }
@@ -1533,6 +1801,18 @@ VOID SaveSettings(VOID)
 	}
 }
 
+int GetSelectedItemCount (void)
+{
+	int selected = 0;
+	int numServers = ListView_GetItemCount (GetDlgItem(hwndMain, IDC_LIST));
+	for (int i = 0; i < numServers; i++)
+	{
+		if (ListView_GetCheckState (GetDlgItem(hwndMain, IDC_LIST), i))
+			selected++;
+	}
+	return selected;
+}
+
 LRESULT CALLBACK ProcMain(HWND hDlg, UINT message, UINT wParam, LONG lParam)
 {
 	switch (message)
@@ -1563,13 +1843,44 @@ LRESULT CALLBACK ProcMain(HWND hDlg, UINT message, UINT wParam, LONG lParam)
 		case WM_COMMAND :
 			switch (LOWORD(wParam))
 			{
+				case IDC_LIST:
+					if (ThreadID)
+						return TRUE;
+					break;
+
+				case IDC_US:
+				case IDC_SA:
+				case IDC_EU:
+				case IDC_OTHER:
+				case IDC_ASIA:
+					if (HIWORD(wParam) == BN_CLICKED)
+						SelectServersByRegion(LOWORD(wParam));
+					return TRUE;
 				case IDOK:
 					if (HIWORD(wParam) == BN_CLICKED)
 					{
-						if (ThreadID)
+						if (buttonState == 2)
+						{
+							ResetList();
+							EnableWindow(GetDlgItem(hwndMain, IDC_US), TRUE);
+							EnableWindow(GetDlgItem(hwndMain, IDC_SA), TRUE);
+							EnableWindow(GetDlgItem(hwndMain, IDC_EU), TRUE);
+							EnableWindow(GetDlgItem(hwndMain, IDC_ASIA), TRUE);
+							EnableWindow(GetDlgItem(hwndMain, IDC_OTHER), TRUE);
+							EnableWindow(GetDlgItem(hwndMain, IDC_EDIT1), TRUE);
+							EnableWindow(GetDlgItem(hwndMain, IDC_COMBO1), TRUE);
+							EnableWindow(GetDlgItem(hwndMain, IDC_DURATION), TRUE);
+							EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), FALSE);
+							SetDlgItemText(hwndMain, IDOK, L"Start");
+							buttonState = 0;
+							return TRUE;
+						}
+
+						if (buttonState == 1)
 						{
 							SetEvent(hAbortThreadEvent);
 							EnableWindow(GetDlgItem(hwndMain, IDOK), FALSE);
+							buttonState = 2;
 							return TRUE;
 						}
 
@@ -1580,9 +1891,9 @@ LRESULT CALLBACK ProcMain(HWND hDlg, UINT message, UINT wParam, LONG lParam)
 						{
 							MessageBox(hDlg, L"Please enter your Twitch stream key.", L"Error", MB_ICONEXCLAMATION);
 						}
-						else if (GetServerMasks() == 0)
+						else if (GetSelectedItemCount() == 0)
 						{
-							MessageBox(hDlg, L"Please choose at least one region to test.", L"Error", MB_ICONEXCLAMATION);
+							MessageBox(hDlg, L"Please choose at least one server to test.", L"Error", MB_ICONEXCLAMATION);
 						}
 						else
 						{
@@ -1590,22 +1901,29 @@ LRESULT CALLBACK ProcMain(HWND hDlg, UINT message, UINT wParam, LONG lParam)
 							SetDlgItemText(hwndMain, IDOK, L"Abort");
 							//EnableWindow(GetDlgItem(hwndMain, IDOK), FALSE);
 							EnableWindow(GetDlgItem(hwndMain, IDC_US), FALSE);
+							EnableWindow(GetDlgItem(hwndMain, IDC_SA), FALSE);
 							EnableWindow(GetDlgItem(hwndMain, IDC_EU), FALSE);
 							EnableWindow(GetDlgItem(hwndMain, IDC_ASIA), FALSE);
 							EnableWindow(GetDlgItem(hwndMain, IDC_OTHER), FALSE);
 							EnableWindow(GetDlgItem(hwndMain, IDC_EDIT1), FALSE);
 							EnableWindow(GetDlgItem(hwndMain, IDC_COMBO1), FALSE);
+							//EnableWindow(GetDlgItem(hwndMain, IDC_LIST), FALSE);
 							EnableWindow(GetDlgItem(hwndMain, IDC_DURATION), FALSE);
 							EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), FALSE);
 							_beginthreadex (NULL, 0, (_beginthreadex_proc_type)BandwidthTest, NULL, 0, &ThreadID);
+							buttonState = 1;
 						}
 					}
 					return TRUE;
 
 				case IDC_SHARE:
+#ifdef IMGUR_CLIENT_ID
 					unsigned int dummy;
 					EnableWindow(GetDlgItem(hwndMain, IDC_SHARE), FALSE);
 					_beginthreadex(NULL, 0, (_beginthreadex_proc_type)ScreenshotThread, NULL, 0, &dummy);
+#else
+					MessageBox(hDlg, L"Imgur API key not defined in this build.", L"Error", MB_ICONEXCLAMATION);
+#endif
 					return TRUE;
 
 				case IDC_EXIT:
@@ -1651,11 +1969,14 @@ LRESULT CALLBACK ProcMain(HWND hDlg, UINT message, UINT wParam, LONG lParam)
 	return FALSE;
 }
 
+typedef BOOL (WINAPI *getUserModeExceptionProc)(LPDWORD);
+typedef BOOL (WINAPI *setUserModeExceptionProc)(DWORD);
+
 //
 // Entry point
 //
-int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance,
-					LPSTR lpszCmdLine, int nCmdShow)
+int WINAPI wWinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance,
+	PWSTR lpszCmdLine, int nCmdShow)
 {
 	HWND Myhwnd;
 	MSG	  msg;
@@ -1663,6 +1984,27 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	INITCOMMONCONTROLSEX	common;
 
 	hThisInstance = hInstance;
+
+	HeapSetInformation(NULL, HeapEnableTerminationOnCorruption, NULL, 0);
+	SetProcessDEPPolicy(PROCESS_DEP_ENABLE | PROCESS_DEP_DISABLE_ATL_THUNK_EMULATION);
+
+	//fix for exceptions being swallowed inside callbacks (see KB976038)
+	HMODULE k32 = GetModuleHandle(TEXT("KERNEL32"));
+	if (k32)
+	{
+		DWORD dwFlags;
+		getUserModeExceptionProc procGetProcessUserModeExceptionPolicy;
+		setUserModeExceptionProc procSetProcessUserModeExceptionPolicy;
+
+		procGetProcessUserModeExceptionPolicy = (getUserModeExceptionProc)GetProcAddress(k32, "GetProcessUserModeExceptionPolicy");
+		procSetProcessUserModeExceptionPolicy = (setUserModeExceptionProc)GetProcAddress(k32, "SetProcessUserModeExceptionPolicy");
+
+		if (procGetProcessUserModeExceptionPolicy && procSetProcessUserModeExceptionPolicy)
+		{
+			if (procGetProcessUserModeExceptionPolicy(&dwFlags))
+				procSetProcessUserModeExceptionPolicy(dwFlags & ~1);
+		}
+	}
 
 	common.dwSize = sizeof(common);
 	common.dwICC = ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES;
@@ -1673,14 +2015,14 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance,
 	ULONG_PTR gdiplusToken;
 	GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, NULL);
 
+	if (!wcscmp(lpszCmdLine, L"--disable-data-upload"))
+		disable_data_upload = 1;
+
 	//create window
 	Myhwnd = CreateDialog (hThisInstance, MAKEINTRESOURCE(IDD_DIALOG1), 0, (DLGPROC)ProcMain);
 
 	if (!Myhwnd)
-	{
-		MessageBox(NULL, L"Unable to create initial window. This is probably a good time to reboot.", szAppName, MB_OK);
 		return 1;
-	}
 
 	//set icon
 	hIcon = (HICON)LoadImage(	hThisInstance,
